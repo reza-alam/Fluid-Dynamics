@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nozzle Shock Simulator</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background: #f0f0f0; display: flex; flex-direction: column; align-items: center; }
+        .container { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); width: 800px; }
+        canvas { display: block; margin-bottom: 10px; border: 1px solid #ccc; }
+        .controls { margin-top: 20px; padding: 15px; background: #e8e8e8; border-radius: 5px; }
+        input[type=range] { width: 100%; }
+        .labels { display: flex; justify-content: space-between; font-size: 0.9em; color: #555; }
+        h2 { text-align: center; margin-top: 0; }
+        .status { text-align: center; font-weight: bold; color: #333; margin-bottom: 5px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Nozzle Flow Simulator</h2>
+    
+    <!-- Visualizations -->
+    <canvas id="nozzleCanvas" width="800" height="300"></canvas>
+    <canvas id="plotCanvas" width="800" height="300"></canvas>
+
+    <!-- Controls -->
+    <div class="controls">
+        <div class="status" id="statusText">Regime: Subsonic</div>
+        <div class="labels">
+            <span>Low Back Pressure (Supersonic)</span>
+            <span>High Back Pressure (Subsonic)</span>
+        </div>
+        <input type="range" id="pressureSlider" min="0" max="1000" value="1000">
+        <div style="text-align: center; margin-top: 5px;">
+            Back Pressure Ratio (Pb/P0): <span id="sliderVal">0.99</span>
+        </div>
+    </div>
+</div>
+
+<script>
+// ==========================================
+// 1. CONFIG & PHYSICS CONSTANTS
+// ==========================================
+const GAMMA = 1.4;
+const R = 287;
+const T0 = 300;
+const P0 = 101325;
+const X_LEN = 100;
+const N_ARROWS_X = 21; 
+const N_ARROWS_Y = 9;
+const ARROW_SCALE = 0.06; 
+
+// Geometry Setup
+const x = [];
+const A = [];
+const Y_wall = [];
+const A_inlet = 0.25;
+const A_throat = 0.1;
+const A_exit = 0.25;
+
+for(let i=0; i<X_LEN; i++) {
+    let xi = i / (X_LEN - 1);
+    x.push(xi);
+    let area;
+    if(xi < 0.5) {
+        let shape = 0.5 * (1 + Math.cos(Math.PI * (xi / 0.5)));
+        area = A_throat + (A_inlet - A_throat) * shape;
+    } else {
+        let shape = 0.5 * (1 - Math.cos(Math.PI * ((xi - 0.5) / 0.5)));
+        area = A_throat + (A_exit - A_throat) * shape;
+    }
+    A.push(area);
+    Y_wall.push(Math.sqrt(area / Math.PI));
+}
+
+// ==========================================
+// 2. MATH HELPERS
+// ==========================================
+function area_mach_func(M, area_ratio) {
+    let t1 = 1.0 / (M*M);
+    let t2 = (2/(GAMMA+1)) * (1 + (GAMMA-1)/2 * M*M);
+    let t3 = Math.pow(t2, (GAMMA+1)/(GAMMA-1));
+    return t1 * t3 - area_ratio*area_ratio;
+}
+
+// Root finder (Bisection method for robustness)
+function solve_mach(area_ratio, min_m, max_m) {
+    let a = min_m; 
+    let b = max_m;
+    for(let i=0; i<50; i++) {
+        let c = (a+b)/2;
+        if(area_mach_func(c, area_ratio) * area_mach_func(a, area_ratio) < 0) {
+            b = c;
+        } else {
+            a = c;
+        }
+    }
+    return (a+b)/2;
+}
+
+function get_iso_ratios(M) {
+    let fac = 1 + (GAMMA-1)/2 * M*M;
+    let p = Math.pow(1/fac, GAMMA/(GAMMA-1));
+    let t = 1/fac;
+    return {p, t};
+}
+
+function get_normal_shock_M2(M1) {
+    let num = 1 + (GAMMA-1)/2 * M1*M1;
+    let den = GAMMA*M1*M1 - (GAMMA-1)/2;
+    return Math.sqrt(num/den);
+}
+
+function get_stag_loss(M1) {
+    let t1 = (GAMMA+1)*M1*M1 / (2 + (GAMMA-1)*M1*M1);
+    let t2 = (GAMMA+1) / (2*GAMMA*M1*M1 - (GAMMA-1));
+    return Math.pow(t1, GAMMA/(GAMMA-1)) * Math.pow(t2, 1/(GAMMA-1));
+}
+
+// Pre-calculate Isentropic Branches
+const M_sub = [];
+const M_sup = [];
+for(let i=0; i<X_LEN; i++) {
+    let ar = A[i] / A_throat;
+    M_sub.push(solve_mach(ar, 1e-5, 1.0));
+    M_sup.push(solve_mach(ar, 1.0001, 10.0));
+}
+
+// Critical Limits
+let pr_sub_exit = get_iso_ratios(M_sub[X_LEN-1]).p;
+let m_before = M_sup[X_LEN-1];
+let m_after = get_normal_shock_M2(m_before);
+let p0_loss = get_stag_loss(m_before);
+let pr_static = get_iso_ratios(m_after).p;
+let pr_shock_exit = pr_static * p0_loss;
+
+// Set Slider Ranges
+const slider = document.getElementById('pressureSlider');
+const displayVal = document.getElementById('sliderVal');
+const statusText = document.getElementById('statusText');
+
+// Map slider 0-1000 to range [0.1, pr_sub_exit]
+const MIN_P = 0.1;
+const MAX_P = pr_sub_exit;
+
+// ==========================================
+// 3. RENDERERS
+// ==========================================
+const cvsNozzle = document.getElementById('nozzleCanvas');
+const ctxNozzle = cvsNozzle.getContext('2d');
+const cvsPlot = document.getElementById('plotCanvas');
+const ctxPlot = cvsPlot.getContext('2d');
+
+function jetColor(v, vmin, vmax) {
+    let dv = vmax - vmin;
+    if (dv == 0) {v = 0; dv = 1;}
+    let x = 4 * (v - vmin) / dv;
+    let r = Math.min(x - 1.5, -x + 4.5);
+    let g = Math.min(x - 0.5, -x + 3.5);
+    let b = Math.min(x + 0.5, -x + 2.5);
+    return `rgb(${Math.max(0, Math.min(1, r))*255}, ${Math.max(0, Math.min(1, g))*255}, ${Math.max(0, Math.min(1, b))*255})`;
+}
+
+function drawNozzle(M_dist, V_dist) {
+    const w = cvsNozzle.width;
+    const h = cvsNozzle.height;
+    const cy = h/2;
+    const scaleY = (h/2) * 0.85 / 0.3; // Scale 0.3m radius to fit
+    
+    ctxNozzle.clearRect(0, 0, w, h);
+    
+    // 1. Draw Colored Background (Strip by Strip)
+    for(let i=0; i<X_LEN-1; i++) {
+        let x0 = i * (w/X_LEN);
+        let width = (w/X_LEN) + 1;
+        let radius = Y_wall[i] * scaleY;
+        
+        let vel = V_dist[i];
+        ctxNozzle.fillStyle = jetColor(vel, 0, 500);
+        ctxNozzle.fillRect(x0, cy - radius, width, radius * 2);
+    }
+    
+    // 2. Draw Walls
+    ctxNozzle.beginPath();
+    ctxNozzle.lineWidth = 3;
+    ctxNozzle.strokeStyle = 'black';
+    
+    // Top Wall
+    ctxNozzle.moveTo(0, cy - Y_wall[0]*scaleY);
+    for(let i=0; i<X_LEN; i++) {
+        ctxNozzle.lineTo(i*(w/(X_LEN-1)), cy - Y_wall[i]*scaleY);
+    }
+    ctxNozzle.stroke();
+    
+    // Bottom Wall
+    ctxNozzle.beginPath();
+    ctxNozzle.moveTo(0, cy + Y_wall[0]*scaleY);
+    for(let i=0; i<X_LEN; i++) {
+        ctxNozzle.lineTo(i*(w/(X_LEN-1)), cy + Y_wall[i]*scaleY);
+    }
+    ctxNozzle.stroke();
+    
+    // 3. Draw Vectors
+    ctxNozzle.strokeStyle = 'black';
+    ctxNozzle.lineWidth = 1.5;
+    const arrowCols = Math.round(X_LEN / N_ARROWS_X);
+    
+    for(let i=0; i<X_LEN; i+=5) { // Stride
+        // Check if this index aligns with symmetric columns
+        // Simply sampling every K pixels
+    }
+    
+    // Generate symmetric indices
+    let indices = [];
+    for(let k=0; k<N_ARROWS_X; k++) {
+        indices.push(Math.floor(k * (X_LEN-1) / (N_ARROWS_X-1)));
+    }
+    
+    indices.forEach(idx => {
+        let vel = V_dist[idx];
+        let radius = Y_wall[idx] * scaleY;
+        let px = idx * (w/(X_LEN-1));
+        
+        // Vertical spread
+        for(let j=0; j<N_ARROWS_Y; j++) {
+            let frac = j / (N_ARROWS_Y-1); // 0 to 1
+            let py = (cy - radius*0.8) + frac * (radius*0.8*2);
+            
+            // Draw Arrow
+            let len = vel * ARROW_SCALE;
+            if(len > 0) {
+                ctxNozzle.beginPath();
+                ctxNozzle.moveTo(px - len/2, py);
+                ctxNozzle.lineTo(px + len/2, py);
+                // Head
+                ctxNozzle.lineTo(px + len/2 - 4, py - 3);
+                ctxNozzle.moveTo(px + len/2, py);
+                ctxNozzle.lineTo(px + len/2 - 4, py + 3);
+                ctxNozzle.stroke();
+            }
+        }
+    });
+}
+
+function drawPlots(M_dist, P_dist) {
+    const w = cvsPlot.width;
+    const h = cvsPlot.height;
+    const pad = 40;
+    const graphW = w - pad*2;
+    const graphH = h - pad*2;
+    
+    ctxPlot.clearRect(0, 0, w, h);
+    
+    // Axes
+    ctxPlot.beginPath();
+    ctxPlot.strokeStyle = '#aaa';
+    ctxPlot.lineWidth = 1;
+    ctxPlot.rect(pad, pad, graphW, graphH);
+    ctxPlot.stroke();
+    
+    // Labels
+    ctxPlot.fillStyle = 'black';
+    ctxPlot.font = '12px sans-serif';
+    ctxPlot.fillText("Pressure Ratio (Red)", pad + 10, pad + 20);
+    ctxPlot.fillText("Mach Number (Blue)", pad + 10, pad + 40);
+    
+    // Limits
+    let maxM = 3.0;
+    let maxP = 1.1;
+    
+    // Draw P Line (Red)
+    ctxPlot.beginPath();
+    ctxPlot.strokeStyle = 'red';
+    ctxPlot.lineWidth = 2;
+    for(let i=0; i<X_LEN; i++) {
+        let px = pad + i * (graphW/(X_LEN-1));
+        let py = pad + graphH - (P_dist[i] / maxP) * graphH;
+        if(i==0) ctxPlot.moveTo(px, py);
+        else ctxPlot.lineTo(px, py);
+    }
+    ctxPlot.stroke();
+    
+    // Draw M Line (Blue)
+    ctxPlot.beginPath();
+    ctxPlot.strokeStyle = 'blue';
+    ctxPlot.lineWidth = 2;
+    for(let i=0; i<X_LEN; i++) {
+        let px = pad + i * (graphW/(X_LEN-1));
+        let py = pad + graphH - (M_dist[i] / maxM) * graphH;
+        if(i==0) ctxPlot.moveTo(px, py);
+        else ctxPlot.lineTo(px, py);
+    }
+    ctxPlot.stroke();
+    
+    // Draw M=1 Line
+    let y1 = pad + graphH - (1.0 / maxM) * graphH;
+    ctxPlot.beginPath();
+    ctxPlot.strokeStyle = '#999';
+    ctxPlot.setLineDash([5, 5]);
+    ctxPlot.moveTo(pad, y1);
+    ctxPlot.lineTo(w-pad, y1);
+    ctxPlot.stroke();
+    ctxPlot.setLineDash([]);
+    ctxPlot.fillText("M=1", w-pad-30, y1-5);
+}
+
+// ==========================================
+// 4. SOLVER LOGIC
+// ==========================================
+function update() {
+    // Get Slider Value
+    let raw = parseInt(slider.value);
+    let frac = raw / 1000; 
+    // Invert logic: Slider Right (1000) = Max P (Subsonic)
+    // Slider Left (0) = Min P (Supersonic)
+    let Pb = MIN_P + frac * (MAX_P - MIN_P);
+    displayVal.innerText = Pb.toFixed(3);
+    
+    let M_dist = new Float64Array(X_LEN);
+    let P_dist = new Float64Array(X_LEN);
+    let V_dist = new Float64Array(X_LEN);
+    
+    let mode = "";
+    
+    if (Pb >= pr_sub_exit - 1e-4) {
+        mode = "Subsonic Isentropic";
+        for(let i=0; i<X_LEN; i++) M_dist[i] = M_sub[i];
+        for(let i=0; i<X_LEN; i++) P_dist[i] = get_iso_ratios(M_dist[i]).p;
+        
+    } else if (Pb < pr_sub_exit && Pb > pr_shock_exit) {
+        mode = "Normal Shock in Nozzle";
+        let best_err = 100;
+        let shock_idx = X_LEN - 1;
+        
+        // Search for shock location
+        for(let k = Math.floor(X_LEN/2); k < X_LEN; k++) {
+            let m1 = M_sup[k];
+            let p0_l = get_stag_loss(m1);
+            let a_star_2 = A_throat * (1/p0_l);
+            let ar_exit_2 = A_exit / a_star_2;
+            
+            let m_ex = solve_mach(ar_exit_2, 1e-5, 1.0);
+            let p_exit_calc = get_iso_ratios(m_ex).p * p0_l;
+            
+            if(Math.abs(p_exit_calc - Pb) < best_err) {
+                best_err = Math.abs(p_exit_calc - Pb);
+                shock_idx = k;
+            }
+        }
+        
+        // Build Dist
+        for(let i=0; i<X_LEN; i++) {
+            if(i <= shock_idx) {
+                M_dist[i] = (i <= X_LEN/2) ? M_sub[i] : M_sup[i];
+                P_dist[i] = get_iso_ratios(M_dist[i]).p;
+            } else {
+                let m1 = M_sup[shock_idx];
+                let p0_l = get_stag_loss(m1);
+                let a_star_2 = A_throat * (1/p0_l);
+                let ar_local = A[i] / a_star_2;
+                let m_loc = solve_mach(ar_local, 1e-5, 1.0);
+                M_dist[i] = m_loc;
+                P_dist[i] = get_iso_ratios(m_loc).p * p0_l;
+            }
+        }
+        
+    } else {
+        mode = "Fully Supersonic";
+        for(let i=0; i<X_LEN; i++) {
+            M_dist[i] = (i <= X_LEN/2) ? M_sub[i] : M_sup[i];
+        }
+        for(let i=0; i<X_LEN; i++) P_dist[i] = get_iso_ratios(M_dist[i]).p;
+    }
+    
+    // Calc Velocity
+    for(let i=0; i<X_LEN; i++) {
+        let t_rat = get_iso_ratios(M_dist[i]).t;
+        let t_stat = T0 * t_rat;
+        let a = Math.sqrt(GAMMA * R * t_stat);
+        V_dist[i] = M_dist[i] * a;
+    }
+    
+    statusText.innerText = "Regime: " + mode;
+    
+    drawNozzle(M_dist, V_dist);
+    drawPlots(M_dist, P_dist);
+}
+
+slider.addEventListener('input', update);
+update();
+
+</script>
+</body>
+</html>
