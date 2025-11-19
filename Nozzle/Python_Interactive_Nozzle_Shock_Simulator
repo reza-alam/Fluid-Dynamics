@@ -1,0 +1,294 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.widgets import Slider
+from matplotlib.patches import Polygon
+from scipy.optimize import brentq
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
+import sys
+
+# =========================================================
+#               USER CONFIGURATION PARAMETERS
+# =========================================================
+N_ARROW_COLS = 21       # Number of columns of arrows
+# Matplotlib quiver scale: Number of data units per arrow length unit.
+# Higher value = Shorter arrows.
+ARROW_SCALE_PARAM = 6000
+
+# =========================================================
+# 1. SYSTEM PARAMETERS & GEOMETRY SETUP
+# =========================================================
+GAMMA = 1.4             # Ratio of specific heats (Air)
+R_GAS = 287             # Gas constant (J/kg*K)
+T0 = 300                # Stagnation Temperature (K)
+P0 = 101325             # Inlet Stagnation Pressure (Pa)
+
+# Define Nozzle Geometry
+X_LEN = 101
+x = np.linspace(0, 1, X_LEN)
+
+# Geometry Parameters
+A_INLET = 0.25
+A_THROAT = 0.1
+A_EXIT = 0.25
+
+# Mathematical shape function
+A = np.zeros(X_LEN)
+for i in range(X_LEN):
+    if x[i] < 0.5:
+        xi = x[i] / 0.5
+        shape_factor = 0.5 * (1 + np.cos(np.pi * xi))
+        A[i] = A_THROAT + (A_INLET - A_THROAT) * shape_factor
+    else:
+        xi = (x[i] - 0.5) / 0.5
+        shape_factor = 0.5 * (1 - np.cos(np.pi * xi))
+        A[i] = A_THROAT + (A_EXIT - A_THROAT) * shape_factor
+
+Y_wall = np.sqrt(A / np.pi)
+
+# =========================================================
+# 2. PRE-CALCULATE VECTOR GRID
+# =========================================================
+viz_indices = np.round(np.linspace(0, X_LEN - 1, N_ARROW_COLS)).astype(int)
+NUM_Y_POINTS = 9
+X_field_list = []
+Y_field_list = []
+Map_Indices = []
+
+for idx in viz_indices:
+    y_lim = Y_wall[idx] * 0.85
+    y_local = np.linspace(-y_lim, y_lim, NUM_Y_POINTS)
+    x_local = np.full(NUM_Y_POINTS, x[idx])
+    X_field_list.append(x_local)
+    Y_field_list.append(y_local)
+    Map_Indices.append(np.full(NUM_Y_POINTS, idx))
+
+X_field = np.concatenate(X_field_list)
+Y_field = np.concatenate(Y_field_list)
+Map_Indices = np.concatenate(Map_Indices)
+
+# =========================================================
+# 3. PRE-CALCULATION OF ISENTROPIC BRANCHES
+# =========================================================
+def area_mach_func(M, area_ratio, gamma):
+    term1 = (1.0 / M**2)
+    term2 = (2.0 / (gamma + 1.0)) * (1.0 + (gamma - 1.0) / 2.0 * M**2)
+    term2 = term2 ** ((gamma + 1.0) / (gamma - 1.0))
+    return term1 * term2 - area_ratio**2
+
+def get_isentropic_ratios(M, gamma):
+    factor = 1.0 + (gamma - 1.0) / 2.0 * M**2
+    P_ratio = (1.0 / factor) ** (gamma / (gamma - 1.0))
+    T_ratio = 1.0 / factor
+    return P_ratio, T_ratio
+
+def get_normal_shock_M2(M1, gamma):
+    num = 1.0 + (gamma - 1.0) / 2.0 * M1**2
+    den = gamma * M1**2 - (gamma - 1.0) / 2.0
+    return np.sqrt(num / den)
+
+def get_stagnation_pressure_ratio(M1, gamma):
+    term1_num = (gamma + 1.0) * M1**2
+    term1_den = 2.0 + (gamma - 1.0) * M1**2
+    term1 = (term1_num / term1_den) ** (gamma / (gamma - 1.0))
+    term2_num = gamma + 1.0
+    term2_den = 2.0 * gamma * M1**2 - (gamma - 1.0)
+    term2 = (term2_num / term2_den) ** (1.0 / (gamma - 1.0))
+    return term1 * term2
+
+M_sub_iso = np.zeros(X_LEN)
+M_sup_iso = np.zeros(X_LEN)
+
+for i in range(X_LEN):
+    ar = A[i] / A_THROAT
+    try:
+        M_sub_iso[i] = brentq(area_mach_func, 1e-5, 1.0, args=(ar, GAMMA))
+    except ValueError:
+        M_sub_iso[i] = 1.0
+    try:
+        M_sup_iso[i] = brentq(area_mach_func, 1.00001, 10.0, args=(ar, GAMMA))
+    except ValueError:
+        M_sup_iso[i] = 1.0
+
+P_ratio_sub_exit, _ = get_isentropic_ratios(M_sub_iso[-1], GAMMA)
+M_before_shock = M_sup_iso[-1]
+M_after_shock = get_normal_shock_M2(M_before_shock, GAMMA)
+P0_ratio_shock_val = get_stagnation_pressure_ratio(M_before_shock, GAMMA)
+p_static_ratio, _ = get_isentropic_ratios(M_after_shock, GAMMA)
+P_ratio_shock_exit = p_static_ratio * P0_ratio_shock_val
+
+# =========================================================
+# 4. GUI SETUP (Matplotlib)
+# =========================================================
+fig = plt.figure(figsize=(10, 12), facecolor='white')
+fig.canvas.manager.set_window_title('Nozzle Flow Simulator')
+
+gs = fig.add_gridspec(4, 1, height_ratios=[3, 2, 2, 0.5], hspace=0.4)
+
+# --- AXES 1: Nozzle Geometry (TOP) ---
+ax1 = fig.add_subplot(gs[0])
+ax1.set_title("Velocity Field (Color = Magnitude)")
+ax1.set_ylabel("Radius (m)")
+ax1.set_xlim(0, 1)
+ax1.set_ylim(-0.3, 0.3)
+ax1.set_xticks([])
+
+# Draw Walls
+ax1.plot(x, Y_wall, 'k', linewidth=3)
+ax1.plot(x, -Y_wall, 'k', linewidth=3)
+
+# Prepare Mesh Grid
+y_mesh_vals = np.linspace(-0.3, 0.3, 100)
+X_mesh, Y_mesh = np.meshgrid(x, y_mesh_vals)
+# Mask for outside the nozzle
+mask = np.abs(Y_mesh) > np.interp(X_mesh, x, Y_wall)
+
+# Static Colorbar Setup (Decoupled from plot to prevent issues)
+norm = mcolors.Normalize(vmin=0, vmax=500)
+sm = cm.ScalarMappable(cmap='jet', norm=norm)
+sm.set_array([])
+cbar = fig.colorbar(sm, ax=ax1, fraction=0.046, pad=0.04)
+cbar.set_label('Velocity (m/s)')
+
+# Placeholder for the mesh plot
+mesh_plot = None
+
+# Prepare Quiver (Vectors)
+U_vec = np.zeros_like(X_field)
+V_vec = np.zeros_like(Y_field)
+quiver_plot = ax1.quiver(X_field, Y_field, U_vec, V_vec,
+                         color='k', scale=ARROW_SCALE_PARAM, width=0.003, headwidth=4, zorder=10)
+
+# --- AXES 2: Pressure ---
+ax2 = fig.add_subplot(gs[1])
+ax2.set_ylabel("Pressure Ratio (P/P0)")
+ax2.set_xlim(0, 1)
+ax2.set_ylim(0, 1.1)
+ax2.grid(True)
+ax2.set_xticks([])
+ax2.axhline(P_ratio_sub_exit, color='g', linestyle='--', label='Subsonic Limit')
+ax2.axhline(P_ratio_shock_exit, color='m', linestyle='--', label='Shock Exit Limit')
+line_press, = ax2.plot(x, np.ones(X_LEN), 'r-', linewidth=2)
+ax2.legend(loc='lower left', fontsize='small')
+
+# --- AXES 3: Mach ---
+ax3 = fig.add_subplot(gs[2])
+ax3.set_ylabel("Mach Number")
+ax3.set_xlabel("Position x (m)")
+ax3.set_xlim(0, 1)
+ax3.set_ylim(0, 3.0)
+ax3.grid(True)
+ax3.axhline(1.0, color='k', linestyle='--')
+line_mach, = ax3.plot(x, np.zeros(X_LEN), 'b-', linewidth=2)
+
+# --- SLIDER ---
+ax_slider = fig.add_subplot(gs[3])
+slider = Slider(
+    ax=ax_slider,
+    label='Back Pressure (Pb/P0)',
+    valmin=0.425,
+    valmax=P_ratio_sub_exit,
+    valinit=P_ratio_sub_exit,
+    valstep=0.001,
+)
+
+# =========================================================
+# 5. SOLVER & UPDATE
+# =========================================================
+def update(val):
+    global mesh_plot
+    Pb_ratio = slider.val
+
+    M_dist = np.zeros(X_LEN)
+    P_dist = np.zeros(X_LEN)
+    mode_str = ""
+
+    # -- SOLVER LOGIC --
+    if Pb_ratio >= (P_ratio_sub_exit - 1e-4):
+        M_dist = M_sub_iso.copy()
+        P_dist, _ = get_isentropic_ratios(M_dist, GAMMA)
+        mode_str = 'Subsonic Isentropic'
+
+    elif Pb_ratio < P_ratio_sub_exit and Pb_ratio > P_ratio_shock_exit:
+        best_err = 100.0
+        shock_idx = X_LEN - 1
+        start_node = X_LEN // 2
+
+        for k in range(start_node, X_LEN):
+            M1 = M_sup_iso[k]
+            P0_loss = get_stagnation_pressure_ratio(M1, GAMMA)
+            A_star_2 = A_THROAT * (1.0 / P0_loss)
+            AR_exit_2 = A_EXIT / A_star_2
+            try:
+                M_ex_calc = brentq(area_mach_func, 1e-5, 1.0, args=(AR_exit_2, GAMMA))
+            except ValueError:
+                M_ex_calc = 0.1
+
+            pr_static, _ = get_isentropic_ratios(M_ex_calc, GAMMA)
+            P_exit_calc = pr_static * P0_loss
+
+            if abs(P_exit_calc - Pb_ratio) < best_err:
+                best_err = abs(P_exit_calc - Pb_ratio)
+                shock_idx = k
+
+        M_dist[:shock_idx] = np.where(np.arange(shock_idx) <= X_LEN//2,
+                                      M_sub_iso[:shock_idx],
+                                      M_sup_iso[:shock_idx])
+        P_dist[:shock_idx], _ = get_isentropic_ratios(M_dist[:shock_idx], GAMMA)
+
+        M_dist[shock_idx] = M_sup_iso[shock_idx]
+        P_dist[shock_idx], _ = get_isentropic_ratios(M_dist[shock_idx], GAMMA)
+
+        M1_shock = M_sup_iso[shock_idx]
+        P0_loss = get_stagnation_pressure_ratio(M1_shock, GAMMA)
+        A_star_2 = A_THROAT * (1.0 / P0_loss)
+
+        for k in range(shock_idx + 1, X_LEN):
+            AR_local = A[k] / A_star_2
+            try:
+                M_local = brentq(area_mach_func, 1e-5, 1.0, args=(AR_local, GAMMA))
+            except ValueError:
+                M_local = 0.1
+            M_dist[k] = M_local
+            pr_static, _ = get_isentropic_ratios(M_local, GAMMA)
+            P_dist[k] = pr_static * P0_loss
+        mode_str = 'Normal Shock'
+    else:
+        M_dist[:X_LEN//2+1] = M_sub_iso[:X_LEN//2+1]
+        M_dist[X_LEN//2+1:] = M_sup_iso[X_LEN//2+1:]
+        P_dist, _ = get_isentropic_ratios(M_dist, GAMMA)
+        mode_str = 'Fully Supersonic'
+
+    # -- VISUAL UPDATE --
+    _, T_ratio = get_isentropic_ratios(M_dist, GAMMA)
+    T_dist = T0 * T_ratio
+    a_dist = np.sqrt(GAMMA * R_GAS * T_dist)
+    V_dist = M_dist * a_dist
+
+    # Replot Color Mesh (Safest way to avoid MaskedArray+Gouraud crash)
+    if mesh_plot is not None:
+        mesh_plot.remove()
+
+    # Prepare data
+    V_field_bg = np.tile(V_dist, (len(y_mesh_vals), 1))
+    V_masked = np.ma.masked_array(V_field_bg, mask)
+
+    # Plot new mesh
+    mesh_plot = ax1.pcolormesh(X_mesh, Y_mesh, V_masked, cmap='jet',
+                               vmin=0, vmax=500, shading='gouraud', zorder=0)
+
+    # Update Vectors
+    U_new = V_dist[Map_Indices]
+    V_new = np.zeros_like(U_new)
+    quiver_plot.set_UVC(U_new, V_new)
+
+    # Update Lines
+    line_press.set_ydata(P_dist)
+    ax2.set_title(f"Pressure Ratio (Regime: {mode_str})")
+    line_mach.set_ydata(M_dist)
+
+    fig.canvas.draw_idle()
+
+slider.on_changed(update)
+update(slider.val)
+plt.show()
