@@ -140,7 +140,7 @@ const slider = document.getElementById('pressureSlider');
 const displayVal = document.getElementById('sliderVal');
 const statusText = document.getElementById('statusText');
 
-// Map slider 0-1000 to range [0.42, pr_sub_exit]
+// Map slider 0-1000 to range [0.1, pr_sub_exit]
 const MIN_P = 0.42;
 const MAX_P = pr_sub_exit;
 
@@ -204,6 +204,12 @@ function drawNozzle(M_dist, V_dist) {
     // 3. Draw Vectors
     ctxNozzle.strokeStyle = 'black';
     ctxNozzle.lineWidth = 1.5;
+    const arrowCols = Math.round(X_LEN / N_ARROWS_X);
+    
+    for(let i=0; i<X_LEN; i+=5) { // Stride
+        // Check if this index aligns with symmetric columns
+        // Simply sampling every K pixels
+    }
     
     // Generate symmetric indices
     let indices = [];
@@ -239,34 +245,29 @@ function drawNozzle(M_dist, V_dist) {
 
 function drawPlots(M_dist, P_dist) {
     const w = cvsPlot.width;
-    const h = cvsPlot.height; // 300
+    const h = cvsPlot.height;
     const pad = 40;
-    const gap = 40; // Gap between plots
     const graphW = w - pad*2;
+    const graphH = h - pad*2;
     
-    // Calculate height for each subplot
-    const plotH = (h - 2*pad - gap) / 2;
-    
-    const topPlotY = pad;
-    const botPlotY = pad + plotH + gap;
-
     ctxPlot.clearRect(0, 0, w, h);
     
-    // Limits
-    let maxM = 3.5; // Headroom for Mach
-    let maxP = 1.1;
-
-    // --- TOP PLOT: PRESSURE ---
+    // Axes
     ctxPlot.beginPath();
     ctxPlot.strokeStyle = '#aaa';
     ctxPlot.lineWidth = 1;
-    ctxPlot.rect(pad, topPlotY, graphW, plotH);
+    ctxPlot.rect(pad, pad, graphW, graphH);
     ctxPlot.stroke();
-
-    // Label
-    ctxPlot.fillStyle = 'red';
-    ctxPlot.font = 'bold 12px sans-serif';
-    ctxPlot.fillText("Pressure Ratio (P/P0)", pad + 10, topPlotY + 20);
+    
+    // Labels
+    ctxPlot.fillStyle = 'black';
+    ctxPlot.font = '12px sans-serif';
+    ctxPlot.fillText("Pressure Ratio (Red)", pad + 10, pad + 20);
+    ctxPlot.fillText("Mach Number (Blue)", pad + 10, pad + 40);
+    
+    // Limits
+    let maxM = 3.0;
+    let maxP = 1.1;
     
     // Draw P Line (Red)
     ctxPlot.beginPath();
@@ -274,26 +275,26 @@ function drawPlots(M_dist, P_dist) {
     ctxPlot.lineWidth = 2;
     for(let i=0; i<X_LEN; i++) {
         let px = pad + i * (graphW/(X_LEN-1));
-        // Map P (0 to maxP) to (plotH to 0) within top plot
-        let py = (topPlotY + plotH) - (P_dist[i] / maxP) * plotH;
+        let py = pad + graphH - (P_dist[i] / maxP) * graphH;
         if(i==0) ctxPlot.moveTo(px, py);
         else ctxPlot.lineTo(px, py);
     }
     ctxPlot.stroke();
-
-    // --- BOTTOM PLOT: MACH ---
+    
+    // Draw M Line (Blue)
     ctxPlot.beginPath();
-    ctxPlot.strokeStyle = '#aaa';
-    ctxPlot.lineWidth = 1;
-    ctxPlot.rect(pad, botPlotY, graphW, plotH);
+    ctxPlot.strokeStyle = 'blue';
+    ctxPlot.lineWidth = 2;
+    for(let i=0; i<X_LEN; i++) {
+        let px = pad + i * (graphW/(X_LEN-1));
+        let py = pad + graphH - (M_dist[i] / maxM) * graphH;
+        if(i==0) ctxPlot.moveTo(px, py);
+        else ctxPlot.lineTo(px, py);
+    }
     ctxPlot.stroke();
-
-    // Label
-    ctxPlot.fillStyle = 'blue';
-    ctxPlot.fillText("Mach Number", pad + 10, botPlotY + 20);
-
+    
     // Draw M=1 Line
-    let y1 = (botPlotY + plotH) - (1.0 / maxM) * plotH;
+    let y1 = pad + graphH - (1.0 / maxM) * graphH;
     ctxPlot.beginPath();
     ctxPlot.strokeStyle = '#999';
     ctxPlot.setLineDash([5, 5]);
@@ -301,22 +302,7 @@ function drawPlots(M_dist, P_dist) {
     ctxPlot.lineTo(w-pad, y1);
     ctxPlot.stroke();
     ctxPlot.setLineDash([]);
-    ctxPlot.fillStyle = '#666';
-    ctxPlot.font = '10px sans-serif';
     ctxPlot.fillText("M=1", w-pad-30, y1-5);
-
-    // Draw M Line (Blue)
-    ctxPlot.beginPath();
-    ctxPlot.strokeStyle = 'blue';
-    ctxPlot.lineWidth = 2;
-    for(let i=0; i<X_LEN; i++) {
-        let px = pad + i * (graphW/(X_LEN-1));
-        // Map M (0 to maxM) to (plotH to 0) within bottom plot
-        let py = (botPlotY + plotH) - (M_dist[i] / maxM) * plotH;
-        if(i==0) ctxPlot.moveTo(px, py);
-        else ctxPlot.lineTo(px, py);
-    }
-    ctxPlot.stroke();
 }
 
 // ==========================================
@@ -406,4 +392,5 @@ update();
 
 </script>
 </body>
+
 </html>
