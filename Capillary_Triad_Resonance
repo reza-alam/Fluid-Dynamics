@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Dispersion Relation</title>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.7/MathJax.js?config=TeX-AMS-MML_SVG"></script>
+    <style>
+        body { font-family: "Times New Roman", Times, serif; margin: 20px; background-color: #f4f4f4; }
+        .container { max-width: 900px; margin: 0 auto; background: white; padding: 20px; box-shadow: 0 0 10px rgba(0,0,0,0.1); border-radius: 8px; }
+        .controls { margin-top: 20px; padding: 15px; background: #eef; border-radius: 5px; }
+        label { font-size: 1.1em; margin-right: 10px; }
+        input[type=range] { width: 300px; vertical-align: middle; }
+        #k0-val { font-weight: bold; font-family: "Courier New", monospace; margin-left: 10px; }
+        .caption { margin-top: 15px; font-style: italic; color: #444; text-align: center; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2 style="text-align: center;">Interactive Capillary-Gravity Wave Analysis</h2>
+    
+    <div id="plotDiv" style="width: 100%; height: 600px;"></div>
+
+    <div class="controls">
+        <label for="k0Slider">Adjust Carrier Wavenumber ($\kappa_0$):</label>
+        <input type="range" id="k0Slider" min="0" max="12.5" step="0.1" value="0">
+        <span id="k0-val">0.00</span>
+    </div>
+
+    <div class="caption">
+        <strong>Figure 1:</strong> Graphical construction of the resonance condition for capillary-gravity waves (Bo = 100).<br>
+        Blue: $\Omega(\kappa)$. Red Dashed: Shifted curve $\Omega(\kappa - \kappa_0) + \Omega(\kappa_0)$.<br>
+        Green Circle: Resonant triad intersection.
+    </div>
+</div>
+
+<script>
+    // --- 1. CONFIGURATION ---
+    const Bo = 100.0;
+    const kMax = 25.0;
+    const numPoints = 1000;
+    
+    // --- 2. PHYSICS FUNCTIONS ---
+    function getOmega(k) {
+        if (k < 0) return 0; // Handle numerical noise
+        const termGravity = k;
+        const termCapillary = Math.pow(k, 3) / Bo;
+        const termDepth = Math.tanh(k);
+        return Math.sqrt((termGravity + termCapillary) * termDepth);
+    }
+
+    // Generate Base Grid
+    const kGrid = [];
+    const omegaBase = [];
+    for (let i = 0; i <= numPoints; i++) {
+        let k = (i / numPoints) * kMax;
+        kGrid.push(k);
+        omegaBase.push(getOmega(k));
+    }
+
+    // --- 3. INITIAL PLOT SETUP ---
+    
+    // Trace 1: Base Curve (Blue Solid)
+    const traceBase = {
+        x: kGrid,
+        y: omegaBase,
+        mode: 'lines',
+        name: '$\\Omega(\\kappa)$',
+        line: {color: 'blue', width: 2}
+    };
+
+    // Trace 2: Shifted Curve (Red Dashed) - Initial placeholder
+    const traceShift = {
+        x: [],
+        y: [],
+        mode: 'lines',
+        name: '$\\Omega(\\kappa - \\kappa_0) + \\Omega_0$',
+        line: {color: 'red', dash: 'dash', width: 2}
+    };
+
+    // Trace 3: Kappa0 Marker (Red Dot)
+    const traceK0 = {
+        x: [0],
+        y: [0],
+        mode: 'markers',
+        showlegend: false,
+        marker: {color: 'red', size: 10}
+    };
+
+    // Trace 4: Intersection Marker (Green Dot)
+    const traceInt = {
+        x: [],
+        y: [],
+        mode: 'markers',
+        name: 'Intersection',
+        marker: {color: 'green', size: 12, line: {color: 'black', width: 1}}
+    };
+
+    const layout = {
+        title: {
+            text: '$\\textbf{Dispersion Relation } (\\mathrm{Bo} = 100)$',
+            font: {size: 24}
+        },
+        xaxis: {
+            title: '$\\kappa$',
+            range: [0, kMax],
+            zeroline: true
+        },
+        yaxis: {
+            title: '$\\Omega$',
+            range: [0, Math.max(...omegaBase) * 1.05],
+            zeroline: true
+        },
+        legend: {x: 0.05, y: 0.95},
+        hovermode: 'closest'
+    };
+
+    const config = {responsive: true};
+
+    Plotly.newPlot('plotDiv', [traceBase, traceShift, traceK0, traceInt], layout, config).then(function() {
+        // Trigger MathJax typeset after first render
+        if (window.MathJax) MathJax.Hub.Queue(["Typeset", MathJax.Hub]);
+    });
+
+    // --- 4. INTERACTIVITY ---
+
+    const slider = document.getElementById('k0Slider');
+    const valDisplay = document.getElementById('k0-val');
+
+    slider.addEventListener('input', function() {
+        updatePlot(parseFloat(this.value));
+    });
+
+    function updatePlot(k0) {
+        valDisplay.textContent = k0.toFixed(2);
+        
+        const w0 = getOmega(k0);
+
+        // Update K0 Marker
+        const updateK0 = { x: [[k0]], y: [[w0]] };
+
+        // --- Calculate Shifted Curve ---
+        const xLocal = [];
+        const yShifted = [];
+        
+        // Only calculate for k >= k0
+        // Find closest index in kGrid
+        let startIdx = Math.floor((k0 / kMax) * numPoints);
+        
+        for(let i = startIdx; i < numPoints; i++) {
+            let k = kGrid[i];
+            if(k < k0) continue; 
+            
+            let k_input = k - k0;
+            let w_local = getOmega(k_input);
+            let w_shift = w_local + w0;
+            
+            xLocal.push(k);
+            yShifted.push(w_shift);
+        }
+
+        const updateShift = { x: [xLocal], y: [yShifted] };
+
+        // --- Find Intersection ---
+        let intX = null;
+        let intY = null;
+
+        // We look for crossing between Base (omegaBase) and Shifted (yShifted)
+        // Note: omegaBase indices need to match xLocal indices
+        // xLocal[j] corresponds to kGrid[startIdx + j] approx
+        
+        for (let j = 0; j < xLocal.length - 1; j++) {
+            // Corresponding index in global grid
+            // Since xLocal is a subset of kGrid, we can map indices directly
+            // provided the step size is consistent.
+            // Using value finding is safer:
+            // But for performance, we know xLocal[0] is approximately kGrid[startIdx]
+            
+            // Let's use value matching roughly (since grid is uniform)
+            let globalIdx = Math.round((xLocal[j] / kMax) * numPoints);
+            
+            if (globalIdx >= omegaBase.length - 1) break;
+
+            let yBase1 = omegaBase[globalIdx];
+            let yBase2 = omegaBase[globalIdx + 1];
+            
+            let yShift1 = yShifted[j];
+            let yShift2 = yShifted[j + 1];
+
+            let diff1 = yBase1 - yShift1;
+            let diff2 = yBase2 - yShift2;
+
+            // Check for crossing
+            if (diff1 * diff2 <= 0) {
+                // Ignore trivial solution near k0 (within 0.1)
+                if (xLocal[j] > k0 + 0.1) {
+                    // Linear interpolation
+                    let fraction = Math.abs(diff1) / (Math.abs(diff1) + Math.abs(diff2) + 1e-12);
+                    let x1 = xLocal[j];
+                    let x2 = xLocal[j+1];
+                    
+                    intX = x1 + fraction * (x2 - x1);
+                    // Get exact Y on base curve
+                    intY = yBase1 + fraction * (yBase2 - yBase1);
+                    break; // Found first non-trivial intersection
+                }
+            }
+        }
+
+        const updateInt = {
+            x: intX !== null ? [[intX]] : [[]],
+            y: intY !== null ? [[intY]] : [[]]
+        };
+
+        // --- Batch Update Plotly ---
+        // Indices: 0=Base, 1=Shifted, 2=K0_Marker, 3=Intersection
+        Plotly.restyle('plotDiv', updateShift, [1]);
+        Plotly.restyle('plotDiv', updateK0, [2]);
+        Plotly.restyle('plotDiv', updateInt, [3]);
+    }
+
+</script>
+
+</body>
+</html>
