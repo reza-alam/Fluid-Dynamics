@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resonance Analysis v7 (HTML/JS)</title>
+    
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.7/MathJax.js?config=TeX-AMS-MML_SVG"></script>
+
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            display: flex;
+            height: 100vh;
+            background-color: #f4f4f4;
+            overflow: hidden; /* Prevent body scroll */
+        }
+
+        /* --- CONTROL PANEL (Left Sidebar) --- */
+        #sidebar {
+            width: 320px;
+            background-color: #ffffff;
+            border-right: 1px solid #ccc;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 2px 0 5px rgba(0,0,0,0.05);
+            overflow-y: auto;
+            flex-shrink: 0;
+        }
+
+        h2 { margin-top: 0; font-size: 18px; color: #333; }
+        
+        .control-group { margin-bottom: 20px; }
+        .control-label {
+            font-weight: bold;
+            font-size: 14px;
+            margin-bottom: 5px;
+            display: block;
+            color: #444;
+        }
+
+        .slider-container {
+            display: flex;
+            align-items: center;
+        }
+
+        input[type="range"] {
+            flex-grow: 1;
+            margin-right: 10px;
+            cursor: pointer;
+        }
+
+        input[type="number"] {
+            width: 60px;
+            padding: 4px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            text-align: right;
+        }
+
+        .divider {
+            height: 2px;
+            background-color: #000;
+            margin: 15px 0;
+            width: 100%;
+        }
+
+        .legend-box {
+            margin-top: auto;
+            background: #f9f9f9;
+            border: 1px solid #eee;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-style: italic;
+            color: #555;
+            line-height: 1.6;
+        }
+
+        /* --- PLOT AREA (Right Side) --- */
+        #plot-area {
+            flex-grow: 1;
+            position: relative;
+            padding: 10px;
+        }
+
+        #plotDiv {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="sidebar">
+        <h2>Control Panel</h2>
+
+        <div class="control-group">
+            <label class="control-label">Plot Range X (&plusmn;&kappa;)</label>
+            <div class="slider-container">
+                <input type="range" id="sl_xlim" min="2.0" max="20.0" step="0.1" value="8.0">
+                <input type="number" id="nb_xlim" value="8.0" step="0.1">
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label class="control-label">Y Max (&Omega;)</label>
+            <div class="slider-container">
+                <input type="range" id="sl_ymax" min="0.1" max="15.0" step="0.1" value="4.0">
+                <input type="number" id="nb_ymax" value="4.0" step="0.1">
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label class="control-label">Y Min (&Omega;)</label>
+            <div class="slider-container">
+                <input type="range" id="sl_ymin" min="-15.0" max="5.0" step="0.1" value="0.0">
+                <input type="number" id="nb_ymin" value="0.0" step="0.1">
+            </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="control-group">
+            <label class="control-label">Shift Point (&kappa;<sub>0</sub>)</label>
+            <div class="slider-container">
+                <input type="range" id="sl_k0" min="0.1" max="5.0" step="0.01" value="1.5">
+                <input type="number" id="nb_k0" value="1.5" step="0.01">
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label class="control-label">Density Ratio (R)</label>
+            <div class="slider-container">
+                <input type="range" id="sl_R" min="0.01" max="0.99" step="0.001" value="0.85">
+                <input type="number" id="nb_R" value="0.85" step="0.001">
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label class="control-label">Depth Ratio (h)</label>
+            <div class="slider-container">
+                <input type="range" id="sl_h" min="0.1" max="5.0" step="0.01" value="1.0">
+                <input type="number" id="nb_h" value="1.0" step="0.01">
+            </div>
+        </div>
+
+        <div class="legend-box">
+            <div style="font-weight: bold; margin-bottom: 5px;">Legend</div>
+            <span style="color: blue; font-weight: bold;">&#9473;</span> Original Surface<br>
+            <span style="color: red; font-weight: bold;">- -</span> Original Internal<br>
+            <span style="color: blue;">&#9473;</span> Shifted Surface<br>
+            <span style="color: red;">&#183;&#183;&#183;</span> Shifted Internal<br>
+            <span style="color: black;">&#9679;</span> Origin & Shift Point<br>
+            <span style="display:inline-block; width:10px; height:10px; background:#FFFF00; border:1px solid black; border-radius:50%;"></span> Other Intersections
+        </div>
+    </div>
+
+    <div id="plot-area">
+        <div id="plotDiv"></div>
+    </div>
+
+    <script>
+        // --- 1. CONFIGURATION & STATE ---
+        const state = {
+            xlim: 8.0,
+            ymax: 4.0,
+            ymin: 0.0,
+            k0: 1.5,
+            R: 0.85,
+            h: 1.0
+        };
+
+        const NUM_POINTS = 1000;
+
+        // --- 2. MATH FUNCTIONS ---
+        
+        // Generate linspace array
+        function linspace(start, end, num) {
+            const arr = new Float64Array(num);
+            const step = (end - start) / (num - 1);
+            for (let i = 0; i < num; i++) {
+                arr[i] = start + (i * step);
+            }
+            return arr;
+        }
+
+        // Dispersion Solver
+        function solveDispersion(kArr, R, h) {
+            const omS = new Float64Array(kArr.length);
+            const omI = new Float64Array(kArr.length);
+
+            for (let i = 0; i < kArr.length; i++) {
+                let k = kArr[i];
+                // Handle singularity at k=0
+                if (Math.abs(k) < 1e-9) k = 1e-9;
+
+                const th_k = Math.tanh(k);
+                const th_kh = Math.tanh(k * h);
+                const coth_k = 1.0 / th_k;
+                const coth_kh = 1.0 / th_kh;
+
+                const A = R + (coth_k * coth_kh);
+                const B = -k * (coth_k + coth_kh);
+                const C = (k * k) * (1 - R);
+
+                const disc = Math.sqrt(B * B - 4 * A * C);
+                
+                let om2_1 = (-B + disc) / (2 * A);
+                let om2_2 = (-B - disc) / (2 * A);
+
+                if (om2_1 < 0) om2_1 = 0;
+                if (om2_2 < 0) om2_2 = 0;
+
+                omS[i] = Math.sqrt(om2_1);
+                omI[i] = Math.sqrt(om2_2);
+
+                // Pure zero fix
+                if (Math.abs(kArr[i]) < 1e-8) {
+                    omS[i] = 0;
+                    omI[i] = 0;
+                }
+            }
+            return { S: omS, I: omI };
+        }
+
+        // Intersection Finder
+        function findIntersections(xVec, y1Vec, y2Vec) {
+            const xInt = [];
+            const yInt = [];
+            
+            // Calculate differences
+            const diff = new Float64Array(xVec.length);
+            for(let i=0; i<xVec.length; i++) diff[i] = y1Vec[i] - y2Vec[i];
+
+            // Detect sign changes
+            for (let i = 0; i < xVec.length - 1; i++) {
+                if (diff[i] * diff[i+1] <= 0) {
+                    const x_a = xVec[i];
+                    const x_b = xVec[i+1];
+                    const d_a = diff[i];
+                    const d_b = diff[i+1];
+
+                    if (d_a === d_b) continue; // Avoid div by zero
+
+                    const frac = Math.abs(d_a) / (Math.abs(d_a) + Math.abs(d_b));
+                    const x_val = x_a + frac * (x_b - x_a);
+
+                    const val_a = y1Vec[i];
+                    const val_b = y1Vec[i+1];
+                    const y_val = val_a + frac * (val_b - val_a);
+
+                    xInt.push(x_val);
+                    yInt.push(y_val);
+                }
+            }
+            return { x: xInt, y: yInt };
+        }
+
+        // --- 3. UI HANDLING ---
+        
+        // Helper to bind slider <-> number input
+        function bindControl(idStub, stateKey, isFloat=true) {
+            const sl = document.getElementById('sl_' + idStub);
+            const nb = document.getElementById('nb_' + idStub);
+
+            sl.addEventListener('input', () => {
+                nb.value = sl.value;
+                state[stateKey] = parseFloat(sl.value);
+                requestUpdate();
+            });
+
+            nb.addEventListener('change', () => {
+                let val = parseFloat(nb.value);
+                // Clamp within slider limits
+                if(val < parseFloat(sl.min)) val = parseFloat(sl.min);
+                if(val > parseFloat(sl.max)) val = parseFloat(sl.max);
+                
+                nb.value = val;
+                sl.value = val;
+                state[stateKey] = val;
+                requestUpdate();
+            });
+        }
+
+        bindControl('xlim', 'xlim');
+        bindControl('ymax', 'ymax');
+        bindControl('ymin', 'ymin');
+        bindControl('k0', 'k0');
+        bindControl('R', 'R');
+        bindControl('h', 'h');
+
+        // --- 4. PLOTTING LOGIC ---
+
+        function calculateAndPlot() {
+            // Safety check for min/max
+            if (state.ymin >= state.ymax) state.ymin = state.ymax - 0.1;
+
+            const calcLimit = state.xlim * 1.1;
+            const kVec = linspace(-calcLimit, calcLimit, NUM_POINTS);
+
+            // 1. Original Curves
+            const origRes = solveDispersion(kVec, state.R, state.h);
+            const origY = [
+                origRes.S,                  // S+
+                origRes.S.map(v => -v),     // S-
+                origRes.I,                  // I+
+                origRes.I.map(v => -v)      // I-
+            ];
+
+            // 2. Shift Point Omega0
+            // Since solveDispersion needs array, pass single element array
+            const shiftRes0 = solveDispersion([state.k0], state.R, state.h);
+            const Omega0 = shiftRes0.S[0];
+
+            // 3. Shifted Curves
+            const kShiftVec = kVec.map(k => k - state.k0);
+            const shiftRes = solveDispersion(kShiftVec, state.R, state.h);
+            
+            const shiftY = [
+                shiftRes.S.map(v => Omega0 + v), // S+
+                shiftRes.S.map(v => Omega0 - v), // S-
+                shiftRes.I.map(v => Omega0 + v), // I+
+                shiftRes.I.map(v => Omega0 - v)  // I-
+            ];
+
+            // 4. Find Intersections
+            let ixVals = [];
+            let iyVals = [];
+
+            // Compare every Original curve against every Shifted curve
+            for (let i = 0; i < 4; i++) {
+                for (let j = 0; j < 4; j++) {
+                    const inter = findIntersections(kVec, origY[i], shiftY[j]);
+                    for (let k = 0; k < inter.x.length; k++) {
+                        const xi = inter.x[k];
+                        const yi = inter.y[k];
+
+                        // Filter: Inside Y Limits
+                        if (yi >= state.ymin && yi <= state.ymax) {
+                            // Filter: Not Origin (0,0) and Not Shift Point (k0, Omega0)
+                            const distOrigin = Math.sqrt(xi*xi + yi*yi);
+                            const distShift = Math.sqrt((xi-state.k0)**2 + (yi-Omega0)**2);
+                            
+                            if (distOrigin > 1e-3 && distShift > 1e-3) {
+                                ixVals.push(xi);
+                                iyVals.push(yi);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --- BUILD TRACES ---
+            const traces = [];
+
+            // Helper for Original Lines
+            const addTrace = (yData, color, dash, width, name) => {
+                traces.push({
+                    x: kVec, y: yData,
+                    mode: 'lines',
+                    line: { color: color, dash: dash, width: width },
+                    name: name,
+                    showlegend: false,
+                    hoverinfo: 'none' 
+                });
+            };
+
+            // Plot Original Lines (Thick Blue/Red)
+            addTrace(origY[0], 'blue', 'solid', 3, 'Orig Surf');
+            addTrace(origY[1], 'blue', 'solid', 3, 'Orig Surf');
+            addTrace(origY[2], 'red', 'dash', 3, 'Orig Int');
+            addTrace(origY[3], 'red', 'dash', 3, 'Orig Int');
+
+            // Plot Shifted Lines (Thin Blue/Red)
+            // 'dot' in plotly is close to ':'
+            addTrace(shiftY[0], 'blue', 'solid', 1, 'Shift Surf');
+            addTrace(shiftY[1], 'blue', 'solid', 1, 'Shift Surf');
+            addTrace(shiftY[2], 'red', 'dot', 1.5, 'Shift Int');
+            addTrace(shiftY[3], 'red', 'dot', 1.5, 'Shift Int');
+
+            // 5. Markers
+            
+            // Intersections: Bright Yellow (#FFFF00) with Black Perimeter
+            traces.push({
+                x: ixVals, y: iyVals,
+                mode: 'markers',
+                marker: {
+                    color: '#FFFF00',
+                    size: 12, // Same size for all
+                    line: { color: 'black', width: 1.5 }
+                },
+                name: 'Intersections',
+                showlegend: false,
+                hoverinfo: 'x+y'
+            });
+
+            // Origin (Black Circle)
+            traces.push({
+                x: [0], y: [0],
+                mode: 'markers',
+                marker: { color: 'black', size: 12 }, // Same size
+                showlegend: false, hoverinfo: 'none'
+            });
+
+            // Shift Point (Black Circle)
+            traces.push({
+                x: [state.k0], y: [Omega0],
+                mode: 'markers',
+                marker: { color: 'black', size: 12 }, // Same size
+                showlegend: false, hoverinfo: 'none'
+            });
+
+            // --- LAYOUT ---
+            const layout = {
+                title: 'Two-Layer Fluid Dispersion Resonance',
+                xaxis: {
+                    title: '$\\kappa$',
+                    range: [-state.xlim, state.xlim],
+                    zeroline: true,
+                    showgrid: true
+                },
+                yaxis: {
+                    title: '$\\Omega$',
+                    range: [state.ymin, state.ymax],
+                    zeroline: true,
+                    showgrid: true
+                },
+                margin: { l: 60, r: 20, t: 40, b: 50 },
+                showlegend: false
+            };
+
+            // Config: Enable MathJax
+            const config = { responsive: true };
+
+            Plotly.react('plotDiv', traces, layout, config);
+        }
+
+        // --- 5. INITIALIZATION ---
+        
+        let animationFrameId = null;
+        function requestUpdate() {
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+            animationFrameId = requestAnimationFrame(calculateAndPlot);
+        }
+
+        // Initial Plot
+        calculateAndPlot();
+
+        // Handle Window Resize
+        window.addEventListener('resize', () => {
+            Plotly.Plots.resize('plotDiv');
+        });
+
+    </script>
+</body>
+</html>
