@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Couette-Poiseuille Flow</title>
+    <style>
+        body { 
+            font-family: monospace; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            background-color: #ffffff;
+        }
+        canvas { 
+            border: 1px solid #000000; 
+            margin-bottom: 20px; 
+            background-color: #ffffff;
+        }
+        .control-group { 
+            display: flex; 
+            align-items: center; 
+            margin: 10px; 
+            width: 600px; 
+        }
+        .control-group label { 
+            width: 250px; 
+        }
+        .control-group input[type="range"] { 
+            flex-grow: 1; 
+            margin: 0 15px; 
+        }
+        .control-group input[type="text"] { 
+            width: 60px; 
+            text-align: right;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="flowCanvas" width="800" height="500"></canvas>
+    
+    <div class="control-group">
+        <label>Top Velocity (U):</label>
+        <input type="range" id="sld_U" min="-10" max="10" step="0.1" value="0">
+        <input type="text" id="txt_U" value="0.00">
+    </div>
+    
+    <div class="control-group">
+        <label>Pressure Grad (dP/dx):</label>
+        <input type="range" id="sld_P" min="-20" max="20" step="0.1" value="0">
+        <input type="text" id="txt_P" value="0.00">
+    </div>
+
+    <script>
+        const canvas = document.getElementById('flowCanvas');
+        const ctx = canvas.getContext('2d');
+        const sld_U = document.getElementById('sld_U');
+        const txt_U = document.getElementById('txt_U');
+        const sld_P = document.getElementById('sld_P');
+        const txt_P = document.getElementById('txt_P');
+
+        const h_val = 1.0;
+        const mu_val = 1.0;
+        
+        const x_min = -15.0;
+        const x_max = 15.0;
+        const y_min = -0.1;
+        const y_max = 1.1;
+
+        function mapX(x) {
+            return (x - x_min) / (x_max - x_min) * canvas.width;
+        }
+
+        function mapY(y) {
+            return canvas.height - ((y - y_min) / (y_max - y_min) * canvas.height);
+        }
+
+        function syncInputs(source) {
+            if (source === 'sld_U') {
+                txt_U.value = parseFloat(sld_U.value).toFixed(2);
+            }
+            if (source === 'sld_P') {
+                txt_P.value = parseFloat(sld_P.value).toFixed(2);
+            }
+            if (source === 'txt_U') {
+                let val = parseFloat(txt_U.value);
+                if (isNaN(val)) val = 0;
+                val = Math.max(-10, Math.min(10, val));
+                sld_U.value = val;
+                txt_U.value = val.toFixed(2);
+            }
+            if (source === 'txt_P') {
+                let val = parseFloat(txt_P.value);
+                if (isNaN(val)) val = 0;
+                val = Math.max(-20, Math.min(20, val));
+                sld_P.value = val;
+                txt_P.value = val.toFixed(2);
+            }
+            drawPlot();
+        }
+
+        sld_U.addEventListener('input', () => syncInputs('sld_U'));
+        sld_P.addEventListener('input', () => syncInputs('sld_P'));
+        txt_U.addEventListener('change', () => syncInputs('txt_U'));
+        txt_P.addEventListener('change', () => syncInputs('txt_P'));
+
+        function drawPlot() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            let U = parseFloat(sld_U.value);
+            let dPdx = parseFloat(sld_P.value);
+
+            ctx.strokeStyle = '#cccccc';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(mapX(0), mapY(y_min));
+            ctx.lineTo(mapX(0), mapY(y_max));
+            ctx.stroke();
+
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(mapX(x_min), mapY(0));
+            ctx.lineTo(mapX(x_max), mapY(0));
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(mapX(x_min), mapY(h_val));
+            ctx.lineTo(mapX(x_max), mapY(h_val));
+            ctx.stroke();
+
+            let y_pts = [];
+            let u_pts = [];
+            let steps = 100;
+            
+            for (let i = 0; i <= steps; i++) {
+                let y = (i / steps) * h_val;
+                let term1 = (y / h_val) * U;
+                let term2 = (Math.pow(h_val, 2) / (2 * mu_val)) * (-dPdx) * (y / h_val) * (1 - y / h_val);
+                let u = term1 + term2;
+                y_pts.push(y);
+                u_pts.push(u);
+            }
+
+            ctx.strokeStyle = '#0000ff';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(mapX(u_pts[0]), mapY(y_pts[0]));
+            for (let i = 1; i <= steps; i++) {
+                ctx.lineTo(mapX(u_pts[i]), mapY(y_pts[i]));
+            }
+            ctx.stroke();
+
+            ctx.fillStyle = '#ff0000';
+            ctx.strokeStyle = '#ff0000';
+            ctx.lineWidth = 1.5;
+
+            for (let i = 0; i <= steps; i += 6) {
+                let y = y_pts[i];
+                let u = u_pts[i];
+                
+                if (Math.abs(u) < 0.05) continue;
+
+                let px0 = mapX(0);
+                let py0 = mapY(y);
+                let px1 = mapX(u);
+
+                ctx.beginPath();
+                ctx.moveTo(px0, py0);
+                ctx.lineTo(px1, py0);
+                ctx.stroke();
+
+                let dir = u > 0 ? 1 : -1;
+                let head_len_x = Math.min(0.4, Math.abs(u)) * dir;
+                let head_base_x = mapX(u - head_len_x);
+                let head_top_y = mapY(y + 0.015);
+                let head_bot_y = mapY(y - 0.015);
+
+                ctx.beginPath();
+                ctx.moveTo(px1, py0);
+                ctx.lineTo(head_base_x, head_top_y);
+                ctx.lineTo(head_base_x, head_bot_y);
+                ctx.fill();
+            }
+        }
+
+        drawPlot();
+    </script>
+</body>
+</html>
