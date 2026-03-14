@@ -51,7 +51,7 @@
 
   .panel-title {
     font-family: 'JetBrains Mono', monospace;
-    font-size: 22px;
+    font-size: 18px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 1.5px;
@@ -69,7 +69,7 @@
 
   .element-list .hint {
     color: var(--text-dim);
-    font-size: 24px;
+    font-size: 19px;
     padding: 12px 8px;
     text-align: center;
     font-style: italic;
@@ -81,7 +81,7 @@
     padding: 10px 12px;
     border-radius: 6px;
     cursor: pointer;
-    font-size: 26px;
+    font-size: 21px;
     font-family: 'JetBrains Mono', monospace;
     transition: background 0.15s;
     gap: 10px;
@@ -112,7 +112,7 @@
     background: var(--btn-bg);
     color: var(--text);
     font-family: 'DM Sans', sans-serif;
-    font-size: 26px;
+    font-size: 21px;
     font-weight: 600;
     cursor: pointer;
     transition: all 0.15s;
@@ -134,7 +134,7 @@
   }
 
   .prop-label {
-    font-size: 22px;
+    font-size: 18px;
     font-weight: 600;
     color: var(--text-dim);
     text-transform: uppercase;
@@ -151,7 +151,7 @@
     background: var(--input-bg);
     color: var(--text);
     font-family: 'JetBrains Mono', monospace;
-    font-size: 26px;
+    font-size: 21px;
     outline: none;
     transition: border-color 0.2s;
   }
@@ -208,7 +208,7 @@
     background: var(--bg);
     border: 1px solid var(--panel-border);
     border-radius: 6px;
-    font-size: 22px;
+    font-size: 18px;
     line-height: 1.6;
     color: var(--text-dim);
     font-family: 'JetBrains Mono', monospace;
@@ -248,7 +248,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 26px;
+    font-size: 21px;
     cursor: pointer;
     user-select: none;
     white-space: nowrap;
@@ -263,7 +263,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 24px;
+    font-size: 19px;
     color: var(--text-dim);
     font-family: 'JetBrains Mono', monospace;
     white-space: nowrap;
@@ -278,7 +278,7 @@
     left: 50%;
     transform: translate(-50%, -50%);
     color: var(--text-dim);
-    font-size: 32px;
+    font-size: 26px;
     text-align: center;
     pointer-events: none;
     font-family: 'JetBrains Mono', monospace;
@@ -625,7 +625,7 @@
 
     // Axis labels
     ctx.fillStyle = '#6b7280';
-    ctx.font = '22px JetBrains Mono';
+    ctx.font = '18px JetBrains Mono';
     ctx.textAlign = 'center';
     for (let gx = Math.ceil(xmin/gridStep)*gridStep; gx <= xmax; gx += gridStep) {
       if (Math.abs(gx)<1e-9) continue;
@@ -723,14 +723,14 @@
       else if (e.type===3) { ctx.moveTo(sx,sy-r); ctx.lineTo(sx+r,sy+r*0.7); ctx.lineTo(sx-r,sy+r*0.7); ctx.closePath(); }
       ctx.fill(); ctx.stroke();
       ctx.fillStyle = '#1f2328';
-      ctx.font = 'bold 22px JetBrains Mono';
+      ctx.font = 'bold 18px JetBrains Mono';
       ctx.textAlign = 'left';
       ctx.fillText('#'+(i+1), sx+r+5, sy-r);
     }
 
     // Title
     ctx.fillStyle = '#1f2328';
-    ctx.font = '600 28px DM Sans';
+    ctx.font = '600 22px DM Sans';
     ctx.textAlign = 'center';
     ctx.fillText('2D Potential Flow (superposition)', W/2, 34);
   }
