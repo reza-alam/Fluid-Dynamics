@@ -1,0 +1,620 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NACA 2412: singularities and the Kutta condition</title>
+<style>
+:root{
+  --bg:#f5f6f8; --panel:#fff; --ink:#18212b; --muted:#5d6874;
+  --border:#cfd5dc; --blue:#2f6fd6; --red:#d62828; --black:#111;
+  --magenta:#d84db5; --green:#15933c;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:Arial,Helvetica,sans-serif}
+.wrap{max-width:1500px;margin:0 auto;padding:14px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px}
+.topbar{display:flex;align-items:center;gap:12px;margin:2px 0 10px 8px;flex-wrap:wrap}
+.topbar label{font-weight:600}
+select,button{font:inherit}
+select{min-width:250px;padding:7px 9px;border:1px solid #aeb7c1;border-radius:6px;background:#fff}
+canvas{display:block;width:100%;height:auto;border:1px solid #cfd5dc;border-radius:8px;background:#fff}
+.controls{display:grid;grid-template-columns:160px 1fr 105px 130px;gap:8px 12px;align-items:center;margin-top:10px}
+.controls label{text-align:right;font-size:14px}
+input[type=range]{width:100%}
+.val{font-variant-numeric:tabular-nums;font-size:14px}
+button{padding:8px 10px;border:1px solid #aeb7c1;border-radius:7px;background:#fff;cursor:pointer;font-weight:600}
+button:hover{background:#f0f3f6}
+button.active{background:#e8f2ff;border-color:#7ba8df}
+.note{margin-top:8px;font-size:12px;color:var(--muted)}
+@media(max-width:760px){
+  .controls{grid-template-columns:105px 1fr 80px}
+  .controls button{grid-column:2/4}
+  .controls label{font-size:12px}
+  select{min-width:210px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="topbar">
+      <label for="method">Construction method:</label>
+      <select id="method">
+        <option value="source">Source panels</option>
+        <option value="vortex">Vortex panels</option>
+        <option value="doublet">Doublet panels</option>
+      </select>
+    </div>
+
+    <canvas id="cv" width="1400" height="720"></canvas>
+
+    <div class="controls">
+      <label for="g">Γ/(U∞c)</label>
+      <input id="g" type="range" min="-3" max="3" step="0.001" value="0">
+      <div id="gVal" class="val">+0.000</div>
+      <button id="kuttaBtn">Set Kutta</button>
+
+      <label for="sden">Nstreamlines</label>
+      <input id="sden" type="range" min="9" max="121" step="1" value="23">
+      <div id="sdenVal" class="val">23</div>
+      <span></span>
+
+      <label for="vden">NV,x × NV,y</label>
+      <input id="vden" type="range" min="0.5" max="3" step="0.1" value="1">
+      <div id="vdenVal" class="val">23 × 13</div>
+      <button id="vecBtn">Velocity vectors</button>
+    </div>
+
+    <div class="note">
+      Horizontal freestream; NACA 2412 at α = 5°. Source/doublet modes use one interior circulation vortex (green); vortex-panel mode carries circulation in the distributed vortex sheet itself.
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+const UINF=1, ALPHA=5*Math.PI/180, C=1;
+const NSIDE=34, NPLOT=160;
+const XMIN=-0.40, XMAX=1.40, YMIN=-0.46, YMAX=0.46;
+const NX=250, NY=135;
+const EPS_SURF=0.001*C;
+const FIELD_QUAD=6, SURF_QUAD=14;
+
+const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
+const methodSel=document.getElementById('method');
+const gSlider=document.getElementById('g');
+const sSlider=document.getElementById('sden');
+const vSlider=document.getElementById('vden');
+const gVal=document.getElementById('gVal');
+const sVal=document.getElementById('sdenVal');
+const vVal=document.getElementById('vdenVal');
+const kuttaBtn=document.getElementById('kuttaBtn');
+const vecBtn=document.getElementById('vecBtn');
+
+let showVectors=false;
+let busy=false;
+
+function naca2412(n){
+  const m=.02,p=.40,t=.12;
+  const xu=[],yu=[],xl=[],yl=[];
+  for(let i=0;i<=n;i++){
+    const x=i/n;
+    const yt=5*t*(.2969*Math.sqrt(x)-.1260*x-.3516*x*x+.2843*x**3-.1036*x**4);
+    let yc,dy;
+    if(x<p){yc=m/p**2*(2*p*x-x*x);dy=2*m/p**2*(p-x)}
+    else{yc=m/(1-p)**2*((1-2*p)+2*p*x-x*x);dy=2*m/(1-p)**2*(p-x)}
+    const th=Math.atan(dy);
+    xu.push(x-yt*Math.sin(th)); yu.push(yc+yt*Math.cos(th));
+    xl.push(x+yt*Math.sin(th)); yl.push(yc-yt*Math.cos(th));
+  }
+  const xb=[],yb=[];
+  for(let i=n;i>=0;i--){xb.push(xu[i]);yb.push(yu[i])}
+  for(let i=1;i<=n;i++){xb.push(xl[i]);yb.push(yl[i])}
+  return {xb,yb};
+}
+function rotateShape(shape,ang,xp=.25,yp=0){
+  const xb=[],yb=[],ca=Math.cos(ang),sa=Math.sin(ang);
+  for(let i=0;i<shape.xb.length;i++){
+    const X=shape.xb[i]-xp,Y=shape.yb[i]-yp;
+    xb.push(xp+ca*X-sa*Y); yb.push(yp+sa*X+ca*Y);
+  }
+  return {xb,yb};
+}
+
+const body=rotateShape(naca2412(NSIDE),-ALPHA);
+const smoothBody=rotateShape(naca2412(NPLOT),-ALPHA);
+const xb=body.xb,yb=body.yb, xbp=smoothBody.xb,ybp=smoothBody.yb;
+const NP=xb.length-1;
+
+const x1=[],y1=[],x2=[],y2=[],xc=[],yc=[],L=[],tx=[],ty=[],nx=[],ny=[];
+let perimeter=0;
+for(let i=0;i<NP;i++){
+  x1[i]=xb[i];y1[i]=yb[i];x2[i]=xb[i+1];y2[i]=yb[i+1];
+  xc[i]=.5*(x1[i]+x2[i]);yc[i]=.5*(y1[i]+y2[i]);
+  const dx=x2[i]-x1[i],dy=y2[i]-y1[i],ll=Math.hypot(dx,dy);
+  L[i]=ll;perimeter+=ll;tx[i]=dx/ll;ty[i]=dy/ll;nx[i]=ty[i];ny[i]=-tx[i];
+}
+const xref=xb.slice(0,-1).reduce((a,b)=>a+b,0)/NP;
+const yref=yb.slice(0,-1).reduce((a,b)=>a+b,0)/NP;
+const xSurf=xc.map((x,i)=>x+EPS_SURF*nx[i]);
+const ySurf=yc.map((y,i)=>y+EPS_SURF*ny[i]);
+const Un=Float64Array.from(nx,v=>UINF*v);
+const Ut=Float64Array.from(tx,v=>UINF*v);
+
+const dxg=(XMAX-XMIN)/(NX-1), dyg=(YMAX-YMIN)/(NY-1);
+const inside=new Uint8Array(NX*NY);
+
+function pointInPoly(x,y){
+  let c=false;
+  for(let i=0,j=xbp.length-1;i<xbp.length;j=i++){
+    if(((ybp[i]>y)!=(ybp[j]>y)) &&
+       (x<(xbp[j]-xbp[i])*(y-ybp[i])/(ybp[j]-ybp[i])+xbp[i])) c=!c;
+  }
+  return c;
+}
+for(let iy=0;iy<NY;iy++){
+  const y=YMIN+iy*dyg;
+  for(let ix=0;ix<NX;ix++){
+    inside[iy*NX+ix]=pointInPoly(XMIN+ix*dxg,y)?1:0;
+  }
+}
+
+function gauss(n){
+  const presets={
+    6:{
+      z:[-.9324695142,-.6612093865,-.2386191861,.2386191861,.6612093865,.9324695142],
+      w:[.1713244924,.3607615730,.4679139346,.4679139346,.3607615730,.1713244924]
+    },
+    14:{
+      z:[-.9862838087,-.9284348837,-.8272013151,-.6872929048,-.5152486364,-.3191123689,-.1080549487,.1080549487,.3191123689,.5152486364,.6872929048,.8272013151,.9284348837,.9862838087],
+      w:[.0351194603,.0801580872,.1215185707,.1572031672,.1855383975,.2051984637,.2152638535,.2152638535,.2051984637,.1855383975,.1572031672,.1215185707,.0801580872,.0351194603]
+    }
+  };
+  if(!presets[n]) throw new Error("Unsupported Gauss order");
+  return presets[n];
+}
+const g6=gauss(6), g14=gauss(14);
+
+function zeros2(n,m){return Array.from({length:n},()=>new Float64Array(m))}
+function matVec(A,x){
+  const y=new Float64Array(A.length);
+  for(let i=0;i<A.length;i++){let s=0;for(let j=0;j<x.length;j++)s+=A[i][j]*x[j];y[i]=s}
+  return y;
+}
+function solve(A,b){
+  const n=b.length;
+  const M=Array.from({length:n},(_,i)=>Float64Array.from([...A[i],b[i]]));
+  for(let k=0;k<n;k++){
+    let p=k,best=Math.abs(M[k][k]);
+    for(let i=k+1;i<n;i++){const a=Math.abs(M[i][k]);if(a>best){best=a;p=i}}
+    if(best<1e-13) throw new Error("Singular linear system");
+    if(p!==k){const tmp=M[k];M[k]=M[p];M[p]=tmp}
+    const piv=M[k][k];
+    for(let j=k;j<=n;j++)M[k][j]/=piv;
+    for(let i=0;i<n;i++){
+      if(i===k)continue;
+      const f=M[i][k]; if(Math.abs(f)<1e-18)continue;
+      for(let j=k;j<=n;j++)M[i][j]-=f*M[k][j];
+    }
+  }
+  return Float64Array.from(M.map(r=>r[n]));
+}
+function constrainedLS(A,b,c,d){
+  const n=A[0].length,m=A.length;
+  const K=zeros2(n+1,n+1),rhs=new Float64Array(n+1);
+  for(let i=0;i<n;i++){
+    for(let j=0;j<n;j++){
+      let s=0;for(let k=0;k<m;k++)s+=A[k][i]*A[k][j];
+      K[i][j]=s;
+    }
+    let sb=0;for(let k=0;k<m;k++)sb+=A[k][i]*b[k];
+    rhs[i]=sb;K[i][n]=c[i];K[n][i]=c[i];
+  }
+  rhs[n]=d;
+  const sol=solve(K,rhs);
+  return sol.slice(0,n);
+}
+
+function pointVortexVelocity(x,y,x0,y0,Gamma){
+  const rx=x-x0,ry=y-y0,r2=Math.max(rx*rx+ry*ry,1e-12);
+  return [-Gamma*ry/(2*Math.PI*r2),Gamma*rx/(2*Math.PI*r2)];
+}
+function pointVortexSurface(Gamma){
+  const un=new Float64Array(NP),ut=new Float64Array(NP);
+  for(let i=0;i<NP;i++){
+    const [u,v]=pointVortexVelocity(xc[i],yc[i],xref,yref,Gamma);
+    un[i]=nx[i]*u+ny[i]*v;ut[i]=tx[i]*u+ty[i]*v;
+  }
+  return {un,ut};
+}
+const circSurf=pointVortexSurface(1);
+
+function panelInfluence(){
+  const AnS=zeros2(NP,NP),AtS=zeros2(NP,NP),AnV=zeros2(NP,NP),AtV=zeros2(NP,NP);
+  const z=g14.z,w=g14.w;
+  for(let j=0;j<NP;j++){
+    for(let i=0;i<NP;i++){
+      if(i===j){AnS[i][j]=.5;AtS[i][j]=0;AnV[i][j]=0;AtV[i][j]=.5;continue}
+      let us=0,vs=0,uv=0,vv=0;
+      for(let k=0;k<z.length;k++){
+        const s=.5*(z[k]+1)*L[j],ww=.5*L[j]*w[k];
+        const qx=x1[j]+tx[j]*s,qy=y1[j]+ty[j]*s;
+        const rx=xc[i]-qx,ry=yc[i]-qy,r2=rx*rx+ry*ry;
+        us+=ww*rx/(2*Math.PI*r2);vs+=ww*ry/(2*Math.PI*r2);
+        uv+=ww*(-ry)/(2*Math.PI*r2);vv+=ww*rx/(2*Math.PI*r2);
+      }
+      AnS[i][j]=nx[i]*us+ny[i]*vs;AtS[i][j]=tx[i]*us+ty[i]*vs;
+      AnV[i][j]=nx[i]*uv+ny[i]*vv;AtV[i][j]=tx[i]*uv+ty[i]*vv;
+    }
+  }
+  return {AnS,AtS,AnV,AtV};
+}
+const PI=panelInfluence();
+
+function sourceFieldAt(x,y,sigma){
+  let u=0,v=0;const z=g6.z,w=g6.w;
+  for(let j=0;j<NP;j++)for(let k=0;k<z.length;k++){
+    const s=.5*(z[k]+1)*L[j],ww=.5*L[j]*w[k],qx=x1[j]+tx[j]*s,qy=y1[j]+ty[j]*s;
+    const rx=x-qx,ry=y-qy,r2=Math.max(rx*rx+ry*ry,1e-12),q=sigma[j]*ww/(2*Math.PI*r2);
+    u+=q*rx;v+=q*ry;
+  }
+  return [u,v];
+}
+function linearVortexInfluence(){
+  const An=zeros2(NP,NP+1),At=zeros2(NP,NP+1),z=g14.z,w=g14.w;
+  for(let j=0;j<NP;j++){
+    for(let i=0;i<NP;i++){
+      let an1=0,an2=0,at1=0,at2=0;
+      for(let k=0;k<z.length;k++){
+        const s=.5*(z[k]+1)*L[j],ww=.5*L[j]*w[k],N1=1-s/L[j],N2=s/L[j];
+        const qx=x1[j]+tx[j]*s,qy=y1[j]+ty[j]*s;
+        const rx=xSurf[i]-qx,ry=ySurf[i]-qy,r2=Math.max(rx*rx+ry*ry,1e-14);
+        const u=-ry/(2*Math.PI*r2),v=rx/(2*Math.PI*r2);
+        const un=nx[i]*u+ny[i]*v,ut=tx[i]*u+ty[i]*v;
+        an1+=ww*N1*un;an2+=ww*N2*un;at1+=ww*N1*ut;at2+=ww*N2*ut;
+      }
+      An[i][j]+=an1;An[i][j+1]+=an2;At[i][j]+=at1;At[i][j+1]+=at2;
+    }
+  }
+  return {An,At};
+}
+function linearVortexFieldAt(x,y,gamma){
+  let u=0,v=0;const z=g6.z,w=g6.w;
+  for(let j=0;j<NP;j++)for(let k=0;k<z.length;k++){
+    const s=.5*(z[k]+1)*L[j],ww=.5*L[j]*w[k],N1=1-s/L[j],N2=s/L[j];
+    const gq=gamma[j]*N1+gamma[j+1]*N2,qx=x1[j]+tx[j]*s,qy=y1[j]+ty[j]*s;
+    const rx=x-qx,ry=y-qy,r2=Math.max(rx*rx+ry*ry,1e-12);
+    u+=gq*ww*(-ry)/(2*Math.PI*r2);v+=gq*ww*rx/(2*Math.PI*r2);
+  }
+  return [u,v];
+}
+function doubletInfluence(){
+  const An=zeros2(NP,NP),At=zeros2(NP,NP);
+  for(let j=0;j<NP;j++)for(let i=0;i<NP;i++){
+    const rx1=xc[i]-x1[j],ry1=yc[i]-y1[j],r21=Math.max(rx1*rx1+ry1*ry1,1e-14);
+    const rx2=xc[i]-x2[j],ry2=yc[i]-y2[j],r22=Math.max(rx2*rx2+ry2*ry2,1e-14);
+    const u=(-ry2/r22+ry1/r21)/(2*Math.PI),v=(rx2/r22-rx1/r21)/(2*Math.PI);
+    An[i][j]=nx[i]*u+ny[i]*v;At[i][j]=tx[i]*u+ty[i]*v;
+  }
+  return {An,At};
+}
+function doubletFieldAt(x,y,mu){
+  let u=0,v=0;
+  for(let j=0;j<NP;j++){
+    const rx1=x-x1[j],ry1=y-y1[j],r21=Math.max(rx1*rx1+ry1*ry1,1e-12);
+    const rx2=x-x2[j],ry2=y-y2[j],r22=Math.max(rx2*rx2+ry2*ry2,1e-12);
+    u+=mu[j]*(-ry2/r22+ry1/r21)/(2*Math.PI);
+    v+=mu[j]*(rx2/r22-rx1/r21)/(2*Math.PI);
+  }
+  return [u,v];
+}
+
+const methods={};
+
+function kuttaValue(V0,V1){
+  const r0=V0[0]+V0[V0.length-1],r1=V1[0]+V1[V1.length-1];
+  return -r0/r1;
+}
+
+function buildSource(){
+  const sigma0=solve(PI.AnS,Float64Array.from(Un,v=>-v));
+  const sigma1=solve(PI.AnS,Float64Array.from(circSurf.un,v=>-v));
+  const vt0=new Float64Array(NP),vt1=new Float64Array(NP);
+  const a0=matVec(PI.AtS,sigma0),a1=matVec(PI.AtS,sigma1);
+  for(let i=0;i<NP;i++){vt0[i]=Ut[i]+a0[i];vt1[i]=a1[i]+circSurf.ut[i]}
+  return {
+    name:"Source panels",type:"source",s0:sigma0,s1:sigma1,vt0,vt1,
+    GK:kuttaValue(vt0,vt1),green:true,
+    singularX:xc,singularY:yc,
+    basisAt:(x,y)=>{
+      const a=sourceFieldAt(x,y,sigma0),b=sourceFieldAt(x,y,sigma1),pv=pointVortexVelocity(x,y,xref,yref,1);
+      return [UINF+a[0],a[1],b[0]+pv[0],b[1]+pv[1]];
+    }
+  };
+}
+
+function buildVortex(){
+  const inf=linearVortexInfluence(), n=NP+1;
+  const A=zeros2(n,n),b0=new Float64Array(n),b1=new Float64Array(n);
+  for(let i=0;i<NP;i++){
+    for(let j=0;j<n;j++)A[i][j]=inf.An[i][j];
+    b0[i]=-Un[i]; b1[i]=0;
+  }
+  const cw=new Float64Array(n);
+  for(let j=0;j<NP;j++){cw[j]+=.5*L[j];cw[j+1]+=.5*L[j]}
+  for(let j=0;j<n;j++)A[NP][j]=cw[j];
+  b0[NP]=0;b1[NP]=1;
+  const g0=solve(A,b0),g1=solve(A,b1);
+  const vt0=new Float64Array(NP),vt1=new Float64Array(NP);
+  const a0=matVec(inf.At,g0),a1=matVec(inf.At,g1);
+  for(let i=0;i<NP;i++){vt0[i]=Ut[i]+a0[i];vt1[i]=a1[i]}
+  return {
+    name:"Vortex panels",type:"vortex",s0:g0,s1:g1,vt0,vt1,
+    GK:kuttaValue(vt0,vt1),green:false,
+    singularX:xb,singularY:yb,
+    basisAt:(x,y)=>{
+      const a=linearVortexFieldAt(x,y,g0),b=linearVortexFieldAt(x,y,g1);
+      return [UINF+a[0],a[1],b[0],b[1]];
+    }
+  };
+}
+
+function buildDoublet(){
+  const inf=doubletInfluence(),ones=new Float64Array(NP).fill(1);
+  const mu0=constrainedLS(inf.An,Float64Array.from(Un,v=>-v),ones,0);
+  const rhs1=Float64Array.from(circSurf.un,v=>-v);
+  const mu1=constrainedLS(inf.An,rhs1,ones,0);
+
+  const vt0=new Float64Array(NP),vt1=new Float64Array(NP);
+  for(let i=0;i<NP;i++){
+    const a=doubletFieldAt(xSurf[i],ySurf[i],mu0);
+    const b=doubletFieldAt(xSurf[i],ySurf[i],mu1);
+    const pv=pointVortexVelocity(xSurf[i],ySurf[i],xref,yref,1);
+    vt0[i]=(UINF+a[0])*tx[i]+a[1]*ty[i];
+    vt1[i]=(b[0]+pv[0])*tx[i]+(b[1]+pv[1])*ty[i];
+  }
+  return {
+    name:"Doublet panels",type:"doublet",s0:mu0,s1:mu1,vt0,vt1,
+    GK:kuttaValue(vt0,vt1),green:true,
+    singularX:xc,singularY:yc,
+    basisAt:(x,y)=>{
+      const a=doubletFieldAt(x,y,mu0),b=doubletFieldAt(x,y,mu1),pv=pointVortexVelocity(x,y,xref,yref,1);
+      return [UINF+a[0],a[1],b[0]+pv[0],b[1]+pv[1]];
+    }
+  };
+}
+
+methods.source=buildSource();
+methods.vortex=buildVortex();
+methods.doublet=buildDoublet();
+
+const maxGK=Math.max(...Object.values(methods).map(m=>Math.abs(m.GK)));
+const GLIM=Math.max(3,5*maxGK);
+gSlider.min=-GLIM;gSlider.max=GLIM;gSlider.value=0;
+
+const fieldCache={};
+function buildField(methodKey){
+  if(fieldCache[methodKey])return fieldCache[methodKey];
+  const M=methods[methodKey],U0=new Float32Array(NX*NY),V0=new Float32Array(NX*NY),U1=new Float32Array(NX*NY),V1=new Float32Array(NX*NY);
+  for(let iy=0;iy<NY;iy++){
+    const y=YMIN+iy*dyg;
+    for(let ix=0;ix<NX;ix++){
+      const x=XMIN+ix*dxg,q=iy*NX+ix;
+      const b=M.basisAt(x,y);
+      U0[q]=b[0];V0[q]=b[1];U1[q]=b[2];V1[q]=b[3];
+    }
+  }
+  fieldCache[methodKey]={U0,V0,U1,V1};
+  return fieldCache[methodKey];
+}
+
+function interp(field,x,y,G){
+  if(x<XMIN||x>XMAX||y<YMIN||y>YMAX)return null;
+  const fx=(x-XMIN)/dxg,fy=(y-YMIN)/dyg;
+  let ix=Math.floor(fx),iy=Math.floor(fy);
+  ix=Math.max(0,Math.min(NX-2,ix));iy=Math.max(0,Math.min(NY-2,iy));
+  const ax=fx-ix,ay=fy-iy,ids=[iy*NX+ix,iy*NX+ix+1,(iy+1)*NX+ix,(iy+1)*NX+ix+1];
+  if(ids.some(q=>inside[q]))return null;
+  function bil(a){
+    const lo=a[ids[0]]*(1-ax)+a[ids[1]]*ax,hi=a[ids[2]]*(1-ax)+a[ids[3]]*ax;
+    return lo*(1-ay)+hi*ay;
+  }
+  return [bil(field.U0)+G*bil(field.U1),bil(field.V0)+G*bil(field.V1)];
+}
+
+function movingAverage(a,w){
+  const n=a.length,b=new Float64Array(n),h=Math.floor(w/2);
+  for(let i=0;i<n;i++){let s=0,c=0;for(let j=Math.max(0,i-h);j<=Math.min(n-1,i+h);j++){s+=a[j];c++}b[i]=s/c}
+  return b;
+}
+function stagnationPoints(M,G){
+  const vt=new Float64Array(M.vt0.length);
+  for(let i=0;i<vt.length;i++)vt[i]=M.vt0[i]+G*M.vt1[i];
+  let w=Math.max(7,Math.round(vt.length/18));if(w%2===0)w++;
+  const v=movingAverage(vt,w),pts=[];
+  for(let i=0;i<v.length-1;i++){
+    if(v[i]===0||v[i]*v[i+1]<0){
+      const f=v[i]===0?0:Math.abs(v[i])/(Math.abs(v[i])+Math.abs(v[i+1]));
+      const px=xc[i]+f*(xc[i+1]-xc[i]),py=yc[i]+f*(yc[i+1]-yc[i]);
+      if(!pts.length||Math.hypot(px-pts[pts.length-1][0],py-pts[pts.length-1][1])>.035)pts.push([px,py]);
+    }
+  }
+  return {pts,vt,residual:vt[0]+vt[vt.length-1]};
+}
+
+function mapX(x){return 58+(x-XMIN)/(XMAX-XMIN)*(cv.width-105)}
+function mapY(y){return cv.height-50-(y-YMIN)/(YMAX-YMIN)*(cv.height-95)}
+function drawArrow(x,y,u,v,scale,color='#111',lw=1,ah=5){
+  const x0=mapX(x),y0=mapY(y),x1p=x0+u*scale,y1p=y0-v*scale;
+  const ang=Math.atan2(y1p-y0,x1p-x0);
+  ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=lw;
+  ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x1p,y1p);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(x1p,y1p);
+  ctx.lineTo(x1p-ah*Math.cos(ang-.45),y1p-ah*Math.sin(ang-.45));
+  ctx.lineTo(x1p-ah*Math.cos(ang+.45),y1p-ah*Math.sin(ang+.45));
+  ctx.closePath();ctx.fill();
+}
+function streamline(field,seedY,G){
+  let x=-.38,y=seedY;
+  ctx.beginPath();ctx.moveTo(mapX(x),mapY(y));
+  const h=.0055,maxSteps=1800;
+  for(let n=0;n<maxSteps;n++){
+    const f=interp(field,x,y,G);if(!f)break;
+    let [u,v]=f,s=Math.hypot(u,v);if(s<1e-5)break;u/=s;v/=s;
+    const f2=interp(field,x+.5*h*u,y+.5*h*v,G);if(!f2)break;
+    let u2=f2[0],v2=f2[1],s2=Math.hypot(u2,v2);if(s2<1e-5)break;u2/=s2;v2/=s2;
+    x+=h*u2;y+=h*v2;
+    if(x<XMIN||x>XMAX||y<YMIN||y>YMAX)break;
+    ctx.lineTo(mapX(x),mapY(y));
+  }
+  ctx.stroke();
+}
+function diamond(px,py,r,fill,stroke){
+  ctx.fillStyle=fill;ctx.strokeStyle=stroke;ctx.beginPath();
+  ctx.moveTo(px,py-r);ctx.lineTo(px+r,py);ctx.lineTo(px,py+r);ctx.lineTo(px-r,py);ctx.closePath();ctx.fill();ctx.stroke();
+}
+function triangle(px,py,r,up,fill,stroke){
+  ctx.fillStyle=fill;ctx.strokeStyle=stroke;ctx.beginPath();
+  if(up){ctx.moveTo(px,py-r);ctx.lineTo(px+r,py+r);ctx.lineTo(px-r,py+r)}
+  else{ctx.moveTo(px,py+r);ctx.lineTo(px+r,py-r);ctx.lineTo(px-r,py-r)}
+  ctx.closePath();ctx.fill();ctx.stroke();
+}
+
+function draw(){
+  const key=methodSel.value,M=methods[key],field=buildField(key);
+  const G=parseFloat(gSlider.value),nStreams=parseInt(sSlider.value,10),vScale=parseFloat(vSlider.value);
+  const nVX=Math.max(6,Math.round(23*vScale)),nVY=Math.max(4,Math.round(13*vScale));
+  gVal.textContent=(G>=0?'+':'')+G.toFixed(3);sVal.textContent=nStreams;vVal.textContent=`${nVX} × ${nVY}`;
+
+  const diag=stagnationPoints(M,G),strength=Float64Array.from(M.s0,(v,i)=>v+G*M.s1[i]);
+  const goodKutta=Math.abs(diag.residual)<.03;
+
+  ctx.clearRect(0,0,cv.width,cv.height);ctx.fillStyle='#fff';ctx.fillRect(0,0,cv.width,cv.height);
+
+  // grid
+  ctx.strokeStyle='#e2e6ea';ctx.lineWidth=1;
+  for(let x=-.4;x<=1.4+1e-9;x+=.2){ctx.beginPath();ctx.moveTo(mapX(x),mapY(YMIN));ctx.lineTo(mapX(x),mapY(YMAX));ctx.stroke()}
+  for(let y=-.4;y<=.4+1e-9;y+=.1){ctx.beginPath();ctx.moveTo(mapX(XMIN),mapY(y));ctx.lineTo(mapX(XMAX),mapY(y));ctx.stroke()}
+
+  // streamlines
+  ctx.strokeStyle='#2f6fd6';ctx.lineWidth=1;
+  for(let i=0;i<nStreams;i++)streamline(field,-.43+i*.86/(nStreams-1),G);
+
+  // vectors
+  if(showVectors){
+    for(let jy=0;jy<nVY;jy++){
+      const y=YMIN+.03+(YMAX-YMIN-.06)*jy/(nVY-1);
+      for(let ix=0;ix<nVX;ix++){
+        const x=XMIN+.04+(XMAX-XMIN-.08)*ix/(nVX-1),f=interp(field,x,y,G);
+        if(!f)continue;
+        const s=Math.hypot(f[0],f[1]);if(!isFinite(s)||s<1e-5)continue;
+        drawArrow(x,y,f[0],f[1],16/Math.max(1,s),'#222',.75);
+      }
+    }
+  }
+
+  // airfoil
+  ctx.fillStyle='#ededed';ctx.strokeStyle='#000';ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(mapX(xbp[0]),mapY(ybp[0]));
+  for(let i=1;i<xbp.length;i++)ctx.lineTo(mapX(xbp[i]),mapY(ybp[i]));
+  ctx.closePath();ctx.fill();ctx.stroke();
+
+  // singularity markers, size proportional to |strength|
+  let maxS=0;for(const s of strength)maxS=Math.max(maxS,Math.abs(s));maxS=Math.max(maxS,1e-12);
+  for(let i=0;i<strength.length;i++){
+    const px=mapX(M.singularX[i]),py=mapY(M.singularY[i]),r=2.4+4.5*Math.abs(strength[i])/maxS;
+    const pos=strength[i]>=0,fill=pos?'#d62828':'#111',stroke=pos?'#8c1111':'#000';
+    if(M.type==='source'){
+      if(pos){ctx.beginPath();ctx.arc(px,py,r,0,2*Math.PI);ctx.fillStyle=fill;ctx.fill();ctx.strokeStyle=stroke;ctx.stroke()}
+      else{ctx.fillStyle=fill;ctx.fillRect(px-r,py-r,2*r,2*r)}
+    }else if(M.type==='vortex'){
+      triangle(px,py,r,pos,fill,stroke);
+    }else{
+      diamond(px,py,r,fill,stroke);
+    }
+  }
+
+  // central circulation vortex for source/doublet only
+  if(M.green && Math.abs(G)>1e-10){
+    const px=mapX(xref),py=mapY(yref);
+    ctx.beginPath();ctx.arc(px,py,8,0,2*Math.PI);ctx.strokeStyle='#15933c';ctx.lineWidth=2.5;ctx.stroke();
+    ctx.fillStyle='#15933c';ctx.font='bold 12px Arial';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText('Γ',px,py);
+    ctx.textAlign='left';ctx.textBaseline='alphabetic';
+  }
+
+  // stagnation points
+  for(const p of diag.pts)diamond(mapX(p[0]),mapY(p[1]),7,'#d84db5','#6d205c');
+
+  // Trailing-edge tangential-velocity arrows
+  // Green arrows show the local upper/lower surface velocity directions
+  // approaching the trailing edge, matching the MATLAB visualization.
+  const teArrowScale=70;
+  drawArrow(xc[0],yc[0],
+            diag.vt[0]*tx[0],diag.vt[0]*ty[0],
+            teArrowScale,'#15933c',2.1,12);
+  drawArrow(xc[NP-1],yc[NP-1],
+            diag.vt[NP-1]*tx[NP-1],diag.vt[NP-1]*ty[NP-1],
+            teArrowScale,'#15933c',2.1,12);
+
+  // TE marker
+  ctx.beginPath();ctx.arc(mapX(xbp[0]),mapY(ybp[0]),7,0,2*Math.PI);ctx.fillStyle=goodKutta?'#1b9d47':'#d83a2e';ctx.fill();ctx.strokeStyle='#000';ctx.stroke();
+
+  // freestream
+  drawArrow(-.33,.405,.16,0,220,'#111',2);
+  ctx.fillStyle='#111';ctx.font='italic 18px Arial';ctx.fillText('U∞',mapX(-.255),mapY(.423));
+
+  // info box
+  ctx.fillStyle='rgba(255,255,255,.94)';ctx.strokeStyle='#bfc5cb';ctx.lineWidth=1;
+  ctx.fillRect(76,60,565,83);ctx.strokeRect(76,60,565,83);
+  ctx.fillStyle='#17202a';ctx.font='17px Arial';
+  ctx.fillText(M.name,92,85);
+  ctx.fillText(`α = 5.0°     Γ/(U∞c) = ${G>=0?'+':''}${G.toFixed(3)}     ΓK/(U∞c) = ${M.GK>=0?'+':''}${M.GK.toFixed(3)}`,92,110);
+  ctx.fillText(`(Vt,u + Vt,l)/U∞ = ${diag.residual>=0?'+':''}${diag.residual.toFixed(3)}     ${goodKutta?'Kutta satisfied':'not Kutta'}`,92,135);
+
+  // legend
+  const lx=cv.width-325,ly=54;
+  const rows=M.green?5:4;
+  ctx.fillStyle='rgba(255,255,255,.94)';ctx.strokeStyle='#aeb5bd';ctx.fillRect(lx,ly,255,28+rows*25);ctx.strokeRect(lx,ly,255,28+rows*25);
+  ctx.font='15px Arial';ctx.fillStyle='#17202a';
+  let yy=ly+22;
+  ctx.strokeStyle='#2f6fd6';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(lx+14,yy-5);ctx.lineTo(lx+48,yy-5);ctx.stroke();ctx.fillStyle='#17202a';ctx.fillText('Streamlines',lx+59,yy);yy+=25;
+  if(M.type==='source'){
+    ctx.beginPath();ctx.arc(lx+31,yy-5,5,0,2*Math.PI);ctx.fillStyle='#d62828';ctx.fill();ctx.fillStyle='#17202a';ctx.fillText('σj > 0  source panels',lx+59,yy);yy+=25;
+    ctx.fillStyle='#111';ctx.fillRect(lx+26,yy-10,10,10);ctx.fillStyle='#17202a';ctx.fillText('σj < 0  sink panels',lx+59,yy);yy+=25;
+  }else if(M.type==='vortex'){
+    triangle(lx+31,yy-5,6,true,'#d62828','#8c1111');ctx.fillStyle='#17202a';ctx.fillText('γj > 0  CCW',lx+59,yy);yy+=25;
+    triangle(lx+31,yy-5,6,false,'#111','#000');ctx.fillStyle='#17202a';ctx.fillText('γj < 0  CW',lx+59,yy);yy+=25;
+  }else{
+    diamond(lx+31,yy-5,6,'#d62828','#8c1111');ctx.fillStyle='#17202a';ctx.fillText('μj > 0  doublets',lx+59,yy);yy+=25;
+    diamond(lx+31,yy-5,6,'#111','#000');ctx.fillStyle='#17202a';ctx.fillText('μj < 0  doublets',lx+59,yy);yy+=25;
+  }
+  diamond(lx+31,yy-5,6,'#d84db5','#6d205c');ctx.fillStyle='#17202a';ctx.fillText('Stagnation points',lx+59,yy);yy+=25;
+  if(M.green){
+    ctx.beginPath();ctx.arc(lx+31,yy-5,6,0,2*Math.PI);ctx.strokeStyle='#15933c';ctx.lineWidth=2;ctx.stroke();ctx.fillStyle='#17202a';ctx.fillText('Interior circulation vortex Γ',lx+59,yy);
+  }
+
+  // axes labels
+  ctx.fillStyle='#17202a';ctx.font='16px Arial';ctx.fillText('x/c',cv.width/2,cv.height-10);
+  ctx.save();ctx.translate(17,cv.height/2);ctx.rotate(-Math.PI/2);ctx.fillText('y/c',0,0);ctx.restore();
+}
+
+methodSel.addEventListener('change',()=>{draw()});
+gSlider.addEventListener('input',draw);
+sSlider.addEventListener('input',draw);
+vSlider.addEventListener('input',draw);
+kuttaBtn.addEventListener('click',()=>{const M=methods[methodSel.value];gSlider.value=M.GK;draw()});
+vecBtn.addEventListener('click',()=>{
+  showVectors=!showVectors;
+  vecBtn.classList.toggle('active',showVectors);
+  vecBtn.textContent=showVectors?'Hide vectors':'Velocity vectors';
+  draw();
+});
+
+draw();
+})();
+</script>
+</body>
+</html>
